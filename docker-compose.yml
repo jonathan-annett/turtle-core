@@ -1,0 +1,138 @@
+# Substrate compose file for the hierarchical agent orchestration methodology.
+#
+# Long-lived services (git-server, architect) come up via plain
+#   docker compose up -d git-server architect
+#
+# Ephemeral services (planner, coder-daemon, auditor) are gated by the
+# "ephemeral" profile and brought up by commission-pair.sh / audit.sh in
+# their own compose project namespace (so multiple pairs can run in parallel
+# without name collisions).
+#
+# Note: the agent-base image is NOT a compose service — it is a build
+# dependency for the role images and is built explicitly by the setup
+# scripts before `docker compose build` runs.
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # git-server: hosts main.git and auditor.git as bare repos. Hand-rolled
+  # debian + sshd + git; the per-role update hook enforces spec §3.3.
+  # ---------------------------------------------------------------------------
+  git-server:
+    build: ./infra/git-server
+    image: agent-git-server:latest
+    container_name: agent-git-server
+    volumes:
+      - main-repo-bare:/srv/git/main.git
+      - auditor-repo-bare:/srv/git/auditor.git
+      - ./infra/keys:/srv/keys:ro
+    networks:
+      - agent-net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # architect: long-lived persistent claude-code session paired with the human.
+  # ---------------------------------------------------------------------------
+  architect:
+    build: ./infra/architect
+    image: agent-architect:latest
+    container_name: agent-architect
+    depends_on:
+      - git-server
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - architect-workspace:/work
+      - architect-auditor-clone:/auditor
+      - claude-state-architect:/home/agent/.claude
+      - ./methodology:/methodology:ro
+      - ./infra/keys/architect:/home/agent/.ssh:ro
+    networks:
+      - agent-net
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # planner: ephemeral, per section. Started by commission-pair.sh.
+  # No container_name — multiple pairs may run in parallel under different
+  # compose project namespaces.
+  # ---------------------------------------------------------------------------
+  planner:
+    build: ./infra/planner
+    image: agent-planner:latest
+    profiles: ["ephemeral"]
+    depends_on:
+      - coder-daemon
+    environment:
+      COMMISSION_HOST:   ${COMMISSION_HOST:-coder-daemon}
+      COMMISSION_PORT:   ${COMMISSION_PORT:-}
+      COMMISSION_TOKEN:  ${COMMISSION_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - claude-state-shared:/home/agent/.claude
+      - ./methodology:/methodology:ro
+      - ./infra/keys/planner:/home/agent/.ssh:ro
+    networks:
+      - agent-net
+    stdin_open: true
+    tty: true
+
+  # ---------------------------------------------------------------------------
+  # coder-daemon: ephemeral, paired with planner. HTTP commissioning service.
+  # ---------------------------------------------------------------------------
+  coder-daemon:
+    build: ./infra/coder-daemon
+    image: agent-coder-daemon:latest
+    profiles: ["ephemeral"]
+    environment:
+      COMMISSION_PORT:   ${COMMISSION_PORT:-}
+      COMMISSION_TOKEN:  ${COMMISSION_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - coder-daemon-state:/data
+      - claude-state-shared:/home/agent/.claude
+      - ./methodology:/methodology:ro
+      - ./infra/keys/coder:/home/agent/.ssh:ro
+    networks:
+      - agent-net
+
+  # ---------------------------------------------------------------------------
+  # auditor: ephemeral, per audit. Started by audit.sh.
+  # ---------------------------------------------------------------------------
+  auditor:
+    build: ./infra/auditor
+    image: agent-auditor:latest
+    profiles: ["ephemeral"]
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - claude-state-shared:/home/agent/.claude
+      - ./methodology:/methodology:ro
+      - ./infra/keys/auditor:/home/agent/.ssh:ro
+    networks:
+      - agent-net
+    stdin_open: true
+    tty: true
+
+volumes:
+  main-repo-bare:
+  auditor-repo-bare:
+  architect-workspace:
+  architect-auditor-clone:
+  coder-daemon-state:
+  # claude-code authentication state — see brief §4.10. The architect's
+  # interactive auth state stays on its own volume; ephemerals share a copy
+  # of just .credentials.json via the shared volume (refreshed by verify.sh).
+  claude-state-architect:
+  claude-state-shared:
+
+# agent-net is shared across compose project namespaces so an ephemeral
+# planner pair (run with -p <pair>) can reach the long-lived git-server.
+# The setup scripts pre-create it (idempotent: 'docker network create' if
+# absent). Per-pair isolation is enforced by the daemon's bearer token +
+# source-IP checks, not by network segmentation.
+networks:
+  agent-net:
+    external: true
+    name: agent-net

@@ -1,0 +1,22 @@
+# Per-role SSH keys are generated locally per clone and must never be
+# committed. Keep the role directories themselves so they exist on clone.
+infra/keys/architect/*
+infra/keys/planner/*
+infra/keys/coder/*
+infra/keys/auditor/*
+infra/keys/human/*
+!infra/keys/*/.gitkeep
+
+# Per-pair credentials emitted by commission-pair.sh.
+.pairs/.pair-*.env
+
+# Per-host overrides.
+.env
+
+# Editor / OS noise.
+*.log
+*.swp
+.DS_Store
+
+# Node — only the coder-daemon image installs deps (inside the container).
+node_modules/

@@ -1,0 +1,51 @@
+#!/bin/bash
+# Planner container entrypoint.
+#  - Clone main.git into /work (the planner is ephemeral; a fresh clone
+#    each commission is correct, not wasteful — repos are small).
+#  - Drop into a bash shell so the human can run 'claude' against the
+#    section brief.
+
+set -euo pipefail
+
+if [ -f /home/agent/.ssh/id_ed25519 ]; then
+    mkdir -p /home/agent/.ssh-rw
+    cp /home/agent/.ssh/id_ed25519     /home/agent/.ssh-rw/id_ed25519
+    cp /home/agent/.ssh/id_ed25519.pub /home/agent/.ssh-rw/id_ed25519.pub 2>/dev/null || true
+    chmod 700 /home/agent/.ssh-rw
+    chmod 600 /home/agent/.ssh-rw/id_ed25519
+    export GIT_SSH_COMMAND="ssh -i /home/agent/.ssh-rw/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+fi
+
+cd /
+
+if [ ! -d /work/.git ]; then
+    echo "Cloning main.git into /work..."
+    git clone git@git-server:/srv/git/main.git /work
+fi
+
+git -C /work config user.name  "planner"
+git -C /work config user.email "planner@substrate.local"
+
+cat <<EOF
+
+================================================================================
+  Planner container (ephemeral)
+================================================================================
+
+  Working clone of main:    /work
+  Methodology docs:         /methodology
+  Coder daemon:             http://${COMMISSION_HOST:-coder-daemon}:${COMMISSION_PORT:-?}
+  Bearer token in env:      \$COMMISSION_TOKEN
+
+  Per the methodology spec §3.3, this container can push only to
+  refs/heads/section/* and refs/heads/task/*; pushes to main are rejected.
+
+  Run 'claude' and supply your section brief filepath. The brief will tell
+  you the section/task branch coordinates and how to commission coders.
+
+================================================================================
+
+EOF
+
+cd /work
+exec bash -l

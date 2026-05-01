@@ -1,0 +1,8 @@
+#!/bin/bash
+# Wrapper invoked by SSH via authorized_keys command="..." entries.
+# First arg is the role name; SSH passes the original git command in
+# $SSH_ORIGINAL_COMMAND. We export GIT_USER so the per-repo update hook
+# can apply the spec §3.3 access table.
+set -euo pipefail
+export GIT_USER="${1:-unknown}"
+exec git-shell -c "${SSH_ORIGINAL_COMMAND:-}"

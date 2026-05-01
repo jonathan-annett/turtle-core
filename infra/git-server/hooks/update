@@ -1,0 +1,107 @@
+#!/bin/bash
+# Update hook installed in main.git and auditor.git.
+# Enforces the spec §3.3 access table by branch + path against the role
+# announced in $GIT_USER (set by /srv/git-shell-wrapper).
+#
+# Args: <ref> <oldsha> <newsha>
+# Exit 0 to accept, non-zero with diagnostic on stderr to reject.
+
+set -euo pipefail
+
+ref="$1"
+old="$2"
+new="$3"
+user="${GIT_USER:-unknown}"
+zero="0000000000000000000000000000000000000000"
+
+# $PWD is the bare-repo dir, e.g. /srv/git/main.git
+repo="$(basename "$(pwd)")"
+
+reject() {
+    echo "" >&2
+    echo "Push rejected by update hook (repo=${repo}, role=${user}, ref=${ref}):" >&2
+    echo "  $*" >&2
+    echo "" >&2
+    exit 1
+}
+
+# Returns the list of paths that differ between $old and $new on stdout.
+# For new branches ($old == zeros), enumerate paths reachable from $new but
+# not from any other ref, capped to avoid unbounded scans.
+changed_paths() {
+    if [ "${old}" = "${zero}" ]; then
+        # New branch — diff against the empty tree to enumerate every file
+        # at the tip. Conservative: any file present in the new branch is
+        # considered "changed by this push" for path-restriction purposes.
+        empty_tree=$(git hash-object -t tree --stdin </dev/null)
+        git diff --name-only "${empty_tree}" "${new}"
+    elif [ "${new}" = "${zero}" ]; then
+        # Branch deletion — no paths changed in the file sense.
+        :
+    else
+        git diff --name-only "${old}" "${new}"
+    fi
+}
+
+if [ "${repo}" = "main.git" ]; then
+    case "${user}" in
+        human)
+            exit 0
+            ;;
+        architect)
+            if [ "${ref}" != "refs/heads/main" ]; then
+                reject "architect may push only to refs/heads/main"
+            fi
+            if [ "${old}" = "${zero}" ]; then
+                reject "architect may not create branches; main already exists"
+            fi
+            while IFS= read -r path; do
+                [ -z "${path}" ] && continue
+                case "${path}" in
+                    briefs/*) ;;
+                    SHARED-STATE.md) ;;
+                    TOP-LEVEL-PLAN.md) ;;
+                    README.md) ;;
+                    MIGRATION-*.md) ;;
+                    *) reject "architect may not modify '${path}' (allowed: briefs/**, SHARED-STATE.md, TOP-LEVEL-PLAN.md, README.md, MIGRATION-*.md)" ;;
+                esac
+            done < <(changed_paths)
+            exit 0
+            ;;
+        planner)
+            case "${ref}" in
+                refs/heads/section/*|refs/heads/task/*) exit 0 ;;
+                *) reject "planner may push only to refs/heads/section/* or refs/heads/task/*" ;;
+            esac
+            ;;
+        coder)
+            case "${ref}" in
+                refs/heads/task/*) exit 0 ;;
+                *) reject "coder may push only to refs/heads/task/*" ;;
+            esac
+            ;;
+        auditor)
+            reject "auditor has no write access to the main repo (spec §3.3); audit reports go in the auditor repo, the architect ferries them"
+            ;;
+        *)
+            reject "unknown role '${user}'"
+            ;;
+    esac
+elif [ "${repo}" = "auditor.git" ]; then
+    case "${user}" in
+        human|auditor)
+            exit 0
+            ;;
+        architect)
+            reject "architect has read-only access to the auditor repo (spec §3.2)"
+            ;;
+        planner|coder)
+            reject "${user} has no access to the auditor repo (spec §3.2)"
+            ;;
+        *)
+            reject "unknown role '${user}'"
+            ;;
+    esac
+else
+    reject "unknown repo '${repo}'"
+fi
