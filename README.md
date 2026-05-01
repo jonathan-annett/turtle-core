@@ -1,3 +1,8 @@
+
+# 🐢 turtle-core
+
+The hierarchical agent orchestration substrate — all the way down.
+
 # Project template — hierarchical agent orchestration substrate
 
 Reusable infrastructure for the methodology described in
