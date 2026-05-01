@@ -391,10 +391,9 @@ async function runCoder(c) {
         }
 
         // 3. Spawn claude-code as the coder subshell.
-        // The deployment doc specifies --permission-mode dontAsk; the
-        // closest existing claude-code mode that runs without human-in-the-
-        // loop prompts is bypassPermissions. See SETUP-BRIEF.report.md for
-        // the documented deviation.
+        // --permission-mode dontAsk + --allowed-tools means out-of-allowlist
+        // actions deny rather than prompt; the coder has no human in the
+        // loop to unblock a permission dialogue (deployment-doc §4.5).
         const prompt = [
             `You are an ephemeral coder agent. Read the brief at ${c.brief_path}`,
             `(absolute: ${briefAbs}) and execute it.`,
@@ -409,7 +408,7 @@ async function runCoder(c) {
 
         const claudeArgs = [
             '-p', prompt,
-            '--permission-mode', 'bypassPermissions',
+            '--permission-mode', 'dontAsk',
         ];
         if (Array.isArray(c.allowed_tools) && c.allowed_tools.length) {
             claudeArgs.push('--allowed-tools', c.allowed_tools.join(','));
