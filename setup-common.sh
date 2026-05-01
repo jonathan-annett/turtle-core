@@ -72,6 +72,14 @@ else
     log "Docker network 'agent-net' already exists."
 fi
 
+log "Ensuring shared docker volumes exist..."
+for vol in claude-state-architect claude-state-shared; do
+    if ! docker volume inspect "${vol}" >/dev/null 2>&1; then
+        docker volume create "${vol}" >/dev/null
+        log "Created docker volume '${vol}'."
+    fi
+done
+
 # ---------------------------------------------------------------------------
 # 5. Build images. agent-base must build first because the role Dockerfiles
 #    reference 'FROM agent-base'. Compose alone doesn't order non-service

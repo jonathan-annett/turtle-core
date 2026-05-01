@@ -121,11 +121,17 @@ volumes:
   architect-workspace:
   architect-auditor-clone:
   coder-daemon-state:
-  # claude-code authentication state — see brief §4.10. The architect's
-  # interactive auth state stays on its own volume; ephemerals share a copy
-  # of just .credentials.json via the shared volume (refreshed by verify.sh).
+  # claude-code authentication state — see brief §4.10. Declared external
+  # so they are NOT removed by 'compose down -v' (which would wipe the user's
+  # auth) and so they have stable, fixed names usable from any compose
+  # project (long-lived setup, or per-pair commission-pair.sh / audit.sh).
+  # The setup scripts pre-create them via 'docker volume create'.
   claude-state-architect:
+    external: true
+    name: claude-state-architect
   claude-state-shared:
+    external: true
+    name: claude-state-shared
 
 # agent-net is shared across compose project namespaces so an ephemeral
 # planner pair (run with -p <pair>) can reach the long-lived git-server.

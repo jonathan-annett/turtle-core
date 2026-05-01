@@ -12,8 +12,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /var/run/sshd
 
 # Create the git user. UID 1100 to avoid colliding with the agent UID 1000
-# used in the role images.
-RUN useradd -m -s /usr/bin/git-shell -u 1100 git \
+# used in the role images. The login shell is /bin/bash, NOT git-shell:
+# our wrapper in /srv/git-shell-wrapper handles GIT_USER export and then
+# exec's git-shell to enforce the git-only restriction. If git-shell were
+# the login shell, sshd would run our 'command="..."' through it and
+# git-shell would reject the wrapper as an unrecognized command.
+# `passwd -d` removes the locked-by-default empty password marker;
+# without it sshd refuses key-based logins for accounts considered locked.
+# PasswordAuthentication is 'no' in sshd_config below.
+RUN useradd -m -s /bin/bash -u 1100 git \
+    && passwd -d git \
     && mkdir -p /home/git/.ssh \
     && chown -R git:git /home/git \
     && chmod 700 /home/git/.ssh
@@ -27,8 +35,6 @@ RUN sed -i \
         /etc/ssh/sshd_config \
     && echo 'AuthorizedKeysFile /home/git/.ssh/authorized_keys' >> /etc/ssh/sshd_config
 
-# Allow git-shell as a login shell (Debian requires it in /etc/shells).
-RUN echo /usr/bin/git-shell >> /etc/shells
 
 # Bare-repo storage. Backed by named volumes in compose.
 RUN mkdir -p /srv/git && chown git:git /srv/git

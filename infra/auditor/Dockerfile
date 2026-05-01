@@ -4,6 +4,9 @@
 
 FROM agent-base
 
+USER root
+RUN mkdir -p /auditor && chown agent:agent /auditor
+
 USER agent
 
 COPY --chown=agent:agent --chmod=0755 entrypoint.sh /home/agent/entrypoint.sh
