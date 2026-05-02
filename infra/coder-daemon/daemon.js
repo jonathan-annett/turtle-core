@@ -23,6 +23,7 @@ const childProc    = require('child_process');
 const fs           = require('fs');
 const path         = require('path');
 const os           = require('os');
+const { parseToolSurface } = require('./parse-tool-surface');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -214,7 +215,6 @@ app.post('/commission', (req, res) => {
     const briefPath  = String(body.brief_path     || '').trim();
     const sectionBr  = String(body.section_branch || '').trim();
     const taskBr     = String(body.task_branch    || '').trim();
-    const allowed    = Array.isArray(body.allowed_tools) ? body.allowed_tools : null;
 
     if (!briefPath || !sectionBr || !taskBr) {
         return res.status(400).json({ error: 'brief_path, section_branch, and task_branch are required' });
@@ -240,12 +240,15 @@ app.post('/commission', (req, res) => {
     const startedAt = new Date().toISOString();
     const logPath = path.join(LOG_ROOT, `coder-${id}.log`);
 
+    // allowed_tools is resolved later from the brief's "Required tool
+    // surface" field (deployment-doc §4.5, spec §7.3). Recorded as null
+    // here; the coder runner fills it in once the brief has been parsed.
     stmts.insert.run({
         commission_id:  id,
         brief_path:     briefPath,
         section_branch: sectionBr,
         task_branch:    taskBr,
-        allowed_tools:  allowed ? JSON.stringify(allowed) : null,
+        allowed_tools:  null,
         started_at:     startedAt,
         log_path:       logPath,
     });
@@ -255,7 +258,6 @@ app.post('/commission', (req, res) => {
         brief_path:     briefPath,
         section_branch: sectionBr,
         task_branch:    taskBr,
-        allowed_tools:  allowed,
         log_path:       logPath,
     });
 
@@ -390,7 +392,28 @@ async function runCoder(c) {
             return finish('failed', { exit_code: null, error: `brief not found at ${c.brief_path} on ${c.section_branch}` });
         }
 
-        // 3. Spawn claude-code as the coder subshell.
+        // 3. Parse the brief's "Required tool surface" field — spec §7.3,
+        // deployment-doc §4.5. A missing or unparseable field fails the
+        // commission rather than defaulting to a permissive list.
+        let allowedTools;
+        try {
+            const briefText = fs.readFileSync(briefAbs, 'utf8');
+            allowedTools = parseToolSurface(briefText);
+        } catch (err) {
+            return finish('failed', {
+                exit_code: null,
+                error: `required-tool-surface parse failed: ${err.message}`,
+            });
+        }
+        try {
+            db.prepare(
+                'UPDATE commissions SET allowed_tools = ? WHERE commission_id = ?'
+            ).run(JSON.stringify(allowedTools), c.commission_id);
+        } catch (_) {
+            // recording failure is non-fatal; the spawn still proceeds.
+        }
+
+        // 4. Spawn claude-code as the coder subshell.
         // --permission-mode dontAsk + --allowed-tools means out-of-allowlist
         // actions deny rather than prompt; the coder has no human in the
         // loop to unblock a permission dialogue (deployment-doc §4.5).
@@ -409,10 +432,8 @@ async function runCoder(c) {
         const claudeArgs = [
             '-p', prompt,
             '--permission-mode', 'dontAsk',
+            '--allowed-tools', allowedTools.join(','),
         ];
-        if (Array.isArray(c.allowed_tools) && c.allowed_tools.length) {
-            claudeArgs.push('--allowed-tools', c.allowed_tools.join(','));
-        }
 
         const logfd = fs.openSync(c.log_path, 'w');
         const claude = childProc.spawn('claude', claudeArgs, {
