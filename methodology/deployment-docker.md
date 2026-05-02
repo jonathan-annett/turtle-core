@@ -271,7 +271,7 @@ When a commission starts, the daemon:
 1. Fetches the latest section branch into a fresh working directory under `/work/coder-<commission_id>/`.
 2. Checks out the section branch, creates the task branch.
 3. Writes an instruction file pointing claude-code at the brief path.
-4. Spawns `claude-code` as a child process, captures stdout/stderr to per-commission log files.
+4. Spawns `claude-code` as a child process (with the per-role flags from §4.5), captures stdout/stderr to per-commission log files.
 5. Waits for the process to exit.
 6. Verifies that the expected report file exists at `briefs/<section>/<task>.report.md` on the task branch tip.
 7. Records exit code, finish time, report path in sqlite.
@@ -300,6 +300,32 @@ CREATE INDEX idx_started ON commissions(started_at);
 ```
 
 The sqlite db lives on the `coder-daemon-state` named volume so the audit trail survives daemon restarts within a session. It's destroyed when the planner exits and the script's `compose down -v` runs.
+
+### 4.5 Per-role invocation flags
+
+Each role invokes `claude-code` with a different combination of flags, reflecting the methodology's asymmetry: the coder has no discretion, the planner has section-scope discretion, the auditor has adversarial license. The invocation flags make that asymmetry operational.
+
+#### Coder
+
+- `-p` (or stream-json under the daemon).
+- `--permission-mode dontAsk`.
+- `--allowedTools` populated from the task brief's "Required tool surface" field (spec §7.3). The daemon reads the field at commission time and translates it into the flag value when spawning the subshell. If the brief lacks the field, the commission fails with a clear error rather than defaulting to a permissive list.
+
+Out-of-allowlist actions deny and surface as task failure rather than blocking on a permission prompt — there is no human in the loop to unblock the coder. No interactivity by design — see spec §11.
+
+#### Planner
+
+- Interactive REPL, or stream-json with passthrough to the human.
+- `--permission-mode default` or `acceptEdits`.
+
+Judgement role; the human is in the loop. The planner can ask for clarification when a brief is genuinely ambiguous, decompose tasks differently than first planned, or escalate to the architect.
+
+#### Auditor
+
+- Interactive, stream-json with passthrough for the check-in rule (see auditor-guide).
+- `--permission-mode acceptEdits` scoped to the auditor repo.
+
+Read-only access to the main repo is enforced by the Docker read-only volume mount (the auditor's main-repo clone is mounted `:ro`), not by permission mode. Permission mode governs the auditor repo where the audit report and supporting tooling live.
 
 ---
 
