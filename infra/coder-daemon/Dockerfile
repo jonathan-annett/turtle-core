@@ -37,7 +37,8 @@ WORKDIR /daemon
 COPY --chown=agent:agent package.json /daemon/package.json
 RUN npm install --omit=dev --no-fund --no-audit
 
-COPY --chown=agent:agent --chmod=0755 daemon.js   /daemon/daemon.js
-COPY --chown=agent:agent --chmod=0755 entrypoint.sh /daemon/entrypoint.sh
+COPY --chown=agent:agent --chmod=0755 daemon.js              /daemon/daemon.js
+COPY --chown=agent:agent              parse-tool-surface.js /daemon/parse-tool-surface.js
+COPY --chown=agent:agent --chmod=0755 entrypoint.sh           /daemon/entrypoint.sh
 
 ENTRYPOINT ["/daemon/entrypoint.sh"]
