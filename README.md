@@ -91,16 +91,25 @@ repository), or Colima + the Docker CLI on macOS (via Homebrew). It is
 ./setup-mac.sh   --install-docker      # macOS
 ```
 
-Run manually if you prefer:
+Or run it directly:
 
 ```bash
 ./install-docker.sh
 ```
 
-The default behavior of `setup-linux.sh` and `setup-mac.sh` is unchanged
-— they still verify your prerequisites without provisioning anything.
-If verification fails because Docker is missing, the failure message
-points at `--install-docker` for users who want the automatic path.
+The flag is a **bootstrap-only mode**: the script runs
+`install-docker.sh` and exits. After it completes — and after a
+re-login (Linux) or shell reload so the new docker-group membership
+takes effect — re-run `./setup-linux.sh` or `./setup-mac.sh` *without*
+the flag to do the actual substrate setup. This deliberate two-shot
+keeps system-package installation cleanly separated from agent-state
+provisioning.
+
+The default behavior of `setup-linux.sh` and `setup-mac.sh` (no flag)
+is unchanged: they verify your prerequisites without provisioning
+anything system-wide. If verification fails because Docker is missing,
+the failure message points at `--install-docker` for users who want
+the automatic path.
 
 ---
 

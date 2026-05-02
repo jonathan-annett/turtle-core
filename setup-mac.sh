@@ -20,7 +20,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # Argument parsing. Recognised flags:
-#   --install-docker    Run install-docker.sh first (Homebrew + Colima).
+#   --install-docker    Run install-docker.sh and exit.
 # ---------------------------------------------------------------------------
 do_install_docker=0
 for arg in "$@"; do
@@ -30,11 +30,13 @@ for arg in "$@"; do
             cat <<'EOF'
 Usage: ./setup-mac.sh [--install-docker]
 
-  --install-docker   Run install-docker.sh first (brew install colima
-                     docker docker-compose docker-buildx; symlink buildx
-                     into ~/.docker/cli-plugins; start Colima with
-                     --cpu 4 --memory 8). Without this flag, setup
-                     verifies prerequisites but does not provision them.
+  --install-docker   Run install-docker.sh and exit. Use this once on a
+                     fresh host to provision Colima + the Docker CLI
+                     (via Homebrew), then re-run ./setup-mac.sh (with no
+                     arguments) to do the actual substrate setup.
+
+  Without --install-docker, setup verifies your prerequisites and brings
+  up the substrate. It does not install or remove anything system-wide.
 EOF
             exit 0 ;;
         *)
@@ -44,12 +46,14 @@ EOF
     esac
 done
 
+# --install-docker is a bootstrap-only mode: provision Docker and exit.
+# Re-run without the flag to do the actual substrate setup.
 if [ "${do_install_docker}" -eq 1 ]; then
     if [ ! -x "${repo_root}/install-docker.sh" ]; then
         echo "setup-mac.sh: install-docker.sh not found or not executable at ${repo_root}/install-docker.sh" >&2
         exit 1
     fi
-    "${repo_root}/install-docker.sh"
+    exec "${repo_root}/install-docker.sh"
 fi
 
 # ---------------------------------------------------------------------------

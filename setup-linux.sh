@@ -9,7 +9,7 @@ cd "${repo_root}"
 
 # ---------------------------------------------------------------------------
 # Argument parsing. Recognised flags:
-#   --install-docker    Run install-docker.sh before the verify steps.
+#   --install-docker    Run install-docker.sh and exit.
 # ---------------------------------------------------------------------------
 do_install_docker=0
 for arg in "$@"; do
@@ -19,10 +19,16 @@ for arg in "$@"; do
             cat <<'EOF'
 Usage: ./setup-linux.sh [--install-docker]
 
-  --install-docker   Run install-docker.sh first (apt install docker-ce,
-                     docker-buildx-plugin, docker-compose-plugin; add user
-                     to docker group). Without this flag, setup verifies
-                     prerequisites but does not provision them.
+  --install-docker   Run install-docker.sh and exit. Use this once on a
+                     fresh host to provision Docker Engine + Compose +
+                     Buildx, then re-run ./setup-linux.sh (with no
+                     arguments) to do the actual substrate setup. The
+                     two-shot pattern is required because the docker-group
+                     membership the installer adds takes effect only in a
+                     new login shell.
+
+  Without --install-docker, setup verifies your prerequisites and brings
+  up the substrate. It does not install or remove anything system-wide.
 EOF
             exit 0 ;;
         *)
@@ -31,6 +37,21 @@ EOF
             exit 2 ;;
     esac
 done
+
+# --install-docker is a bootstrap-only mode: provision Docker and exit.
+# It deliberately does not continue into the verify/setup path because:
+#   1. On Linux, install-docker.sh's group-membership change requires
+#      a new login shell before non-sudo docker works.
+#   2. The substrate-setup steps (key generation, image build, volume
+#      provisioning) are disjoint from system-package installation and
+#      should not run as a side effect of bootstrapping the host.
+if [ "${do_install_docker}" -eq 1 ]; then
+    if [ ! -x "${repo_root}/install-docker.sh" ]; then
+        echo "setup-linux.sh: install-docker.sh not found or not executable at ${repo_root}/install-docker.sh" >&2
+        exit 1
+    fi
+    exec "${repo_root}/install-docker.sh"
+fi
 
 # ---------------------------------------------------------------------------
 # ~/.docker ownership preflight. A prior 'sudo docker' (or any other
@@ -97,18 +118,6 @@ if is_crostini; then
 ================================================================================
 
 EOF
-fi
-
-# ---------------------------------------------------------------------------
-# Optional Docker provisioning (--install-docker). Runs before the verify
-# steps so verification sees the freshly-installed binaries.
-# ---------------------------------------------------------------------------
-if [ "${do_install_docker}" -eq 1 ]; then
-    if [ ! -x "${repo_root}/install-docker.sh" ]; then
-        echo "setup-linux.sh: install-docker.sh not found or not executable at ${repo_root}/install-docker.sh" >&2
-        exit 1
-    fi
-    "${repo_root}/install-docker.sh"
 fi
 
 # ---------------------------------------------------------------------------
