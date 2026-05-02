@@ -19,6 +19,40 @@ if [ "$(uname -s)" != "Darwin" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Argument parsing. Recognised flags:
+#   --install-docker    Run install-docker.sh first (Homebrew + Colima).
+# ---------------------------------------------------------------------------
+do_install_docker=0
+for arg in "$@"; do
+    case "$arg" in
+        --install-docker) do_install_docker=1 ;;
+        -h|--help)
+            cat <<'EOF'
+Usage: ./setup-mac.sh [--install-docker]
+
+  --install-docker   Run install-docker.sh first (brew install colima
+                     docker docker-compose docker-buildx; symlink buildx
+                     into ~/.docker/cli-plugins; start Colima with
+                     --cpu 4 --memory 8). Without this flag, setup
+                     verifies prerequisites but does not provision them.
+EOF
+            exit 0 ;;
+        *)
+            echo "setup-mac.sh: unknown argument: $arg" >&2
+            echo "Try: ./setup-mac.sh --help" >&2
+            exit 2 ;;
+    esac
+done
+
+if [ "${do_install_docker}" -eq 1 ]; then
+    if [ ! -x "${repo_root}/install-docker.sh" ]; then
+        echo "setup-mac.sh: install-docker.sh not found or not executable at ${repo_root}/install-docker.sh" >&2
+        exit 1
+    fi
+    "${repo_root}/install-docker.sh"
+fi
+
+# ---------------------------------------------------------------------------
 # Detect a running Docker runtime. Docker Desktop OR Colima both work.
 # ---------------------------------------------------------------------------
 runtime_ok=0
@@ -29,6 +63,11 @@ fi
 if [ "${runtime_ok}" -ne 1 ]; then
     cat >&2 <<'EOF'
 Docker is not reachable.
+
+  Quick path: re-run with --install-docker to install and start
+  Colima automatically (Homebrew required):
+
+      ./setup-mac.sh --install-docker
 
 You need ONE of:
   (a) Docker Desktop running. Open it from /Applications and wait for

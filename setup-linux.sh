@@ -8,6 +8,31 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${repo_root}"
 
 # ---------------------------------------------------------------------------
+# Argument parsing. Recognised flags:
+#   --install-docker    Run install-docker.sh before the verify steps.
+# ---------------------------------------------------------------------------
+do_install_docker=0
+for arg in "$@"; do
+    case "$arg" in
+        --install-docker) do_install_docker=1 ;;
+        -h|--help)
+            cat <<'EOF'
+Usage: ./setup-linux.sh [--install-docker]
+
+  --install-docker   Run install-docker.sh first (apt install docker-ce,
+                     docker-buildx-plugin, docker-compose-plugin; add user
+                     to docker group). Without this flag, setup verifies
+                     prerequisites but does not provision them.
+EOF
+            exit 0 ;;
+        *)
+            echo "setup-linux.sh: unknown argument: $arg" >&2
+            echo "Try: ./setup-linux.sh --help" >&2
+            exit 2 ;;
+    esac
+done
+
+# ---------------------------------------------------------------------------
 # ~/.docker ownership preflight. A prior 'sudo docker' (or any other
 # root-context docker invocation) leaves ~/.docker owned by root, which
 # breaks subsequent non-sudo docker calls in cryptic ways. Fail fast with
@@ -75,14 +100,33 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
+# Optional Docker provisioning (--install-docker). Runs before the verify
+# steps so verification sees the freshly-installed binaries.
+# ---------------------------------------------------------------------------
+if [ "${do_install_docker}" -eq 1 ]; then
+    if [ ! -x "${repo_root}/install-docker.sh" ]; then
+        echo "setup-linux.sh: install-docker.sh not found or not executable at ${repo_root}/install-docker.sh" >&2
+        exit 1
+    fi
+    "${repo_root}/install-docker.sh"
+fi
+
+# ---------------------------------------------------------------------------
 # Linux-specific prereq verification (the rest is in setup-common.sh).
 # ---------------------------------------------------------------------------
 if ! command -v docker >/dev/null 2>&1; then
     cat >&2 <<'EOF'
-docker is not installed. On Debian/Ubuntu/Crostini:
-    curl -fsSL https://get.docker.com | sh
-    sudo usermod -aG docker "$USER"
-    newgrp docker
+docker is not installed.
+
+  Quick path: re-run with --install-docker to install Docker Engine,
+  Compose, and Buildx automatically (Debian / Ubuntu / Crostini):
+
+      ./setup-linux.sh --install-docker
+
+  Manual path:
+      curl -fsSL https://get.docker.com | sh
+      sudo usermod -aG docker "$USER"
+      newgrp docker
 EOF
     exit 1
 fi

@@ -77,6 +77,31 @@ Not yet directly supported by a dedicated script. Workaround:
 
 A native PowerShell entry point may be added later.
 
+### Optional: `--install-docker`
+
+If you don't already have Docker on the host, the repo ships an
+optional installer at [`install-docker.sh`](install-docker.sh) — an
+idempotent OS-detecting script that installs Docker Engine, Compose v2,
+and Buildx on Debian / Ubuntu / Crostini (via apt + the Docker apt
+repository), or Colima + the Docker CLI on macOS (via Homebrew). It is
+**not** invoked by setup unless you ask for it:
+
+```bash
+./setup-linux.sh --install-docker      # Linux / Crostini / WSL2
+./setup-mac.sh   --install-docker      # macOS
+```
+
+Run manually if you prefer:
+
+```bash
+./install-docker.sh
+```
+
+The default behavior of `setup-linux.sh` and `setup-mac.sh` is unchanged
+— they still verify your prerequisites without provisioning anything.
+If verification fails because Docker is missing, the failure message
+points at `--install-docker` for users who want the automatic path.
+
 ---
 
 ## Quickstart
