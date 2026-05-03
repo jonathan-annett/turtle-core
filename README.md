@@ -312,7 +312,7 @@ to dispose the daemon and the ephemeral env file.
 The daemon's HTTP API (`POST /commission`, `GET /commission/{id}`,
 `GET /commission/{id}/wait`, `POST /commission/{id}/cancel`,
 `GET /commissions`) is documented in
-[`methodology/deployment-docker.md`](methodology/agent-orchestration-spec.md)
+[`methodology/deployment-docker.md`](methodology/deployment-docker.md)
 §4.
 
 ### Auditor (per audit)
@@ -423,6 +423,7 @@ This destroys all substrate state, including any commits to `main.git`,
 ```bash
 docker compose down -v --remove-orphans
 docker network rm agent-net 2>/dev/null || true
+rm -f .substrate-id
 # Re-run setup:
 ./setup-linux.sh
 ```
