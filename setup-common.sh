@@ -50,9 +50,18 @@ fi
 # Sets SUBSTRATE_ID and SUBSTRATE_ID_FRESH_INSTALL for downstream code
 # (volume creation, generate-keys.sh).
 # ---------------------------------------------------------------------------
-log "Checking substrate identity..."
 # shellcheck source=infra/scripts/substrate-identity.sh
 . "${repo_root}/infra/scripts/substrate-identity.sh"
+
+if [ "${TURTLE_CORE_DO_ADOPT:-0}" = "1" ]; then
+    log "Adopting existing substrate (--adopt-existing-substrate)..."
+    substrate_id_adopt
+    log "Adoption succeeded — falling through to ordinary setup. The"
+    log "subsequent gate will see matching state and proceed; the rest"
+    log "of setup will restart the architect via 'compose up -d'."
+fi
+
+log "Checking substrate identity..."
 substrate_id_gate
 
 # Mark generate-keys.sh's invocation context as setup-mediated so it does
