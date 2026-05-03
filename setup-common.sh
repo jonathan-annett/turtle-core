@@ -227,7 +227,14 @@ cat <<'EOF'
 
   First steps for the human:
     1. ./attach-architect.sh
-    2. Inside the architect: 'claude' (or 'claude auth login' first if Path B)
+    2. Inside the architect:
+         Path A — host-creds were pre-loaded; just run 'claude' and you
+                  are logged in.
+         Path B — run 'claude auth login' once. Then detach (Ctrl-P
+                  Ctrl-Q) and run './verify.sh' on the host to
+                  propagate credentials into the shared volume.
+                  Skipping this step leaves planners / coders /
+                  auditors un-authed — every commission will fail.
     3. With the architect, draft TOP-LEVEL-PLAN.md and the first section brief.
     4. Commit those to main; the architect's git-server hook allows it.
     5. Exit the architect; run ./commission-pair.sh <section-slug> to start work.
