@@ -126,6 +126,14 @@ volumes:
   # auth) and so they have stable, fixed names usable from any compose
   # project (long-lived setup, or per-pair commission-pair.sh / audit.sh).
   # The setup scripts pre-create them via 'docker volume create'.
+  #
+  # claude-state-architect carries the substrate-identity label
+  # 'app.turtle-core.substrate-id=<uuid>' — set by setup at volume-create
+  # time, paired with the .substrate-id sentinel at the repo root. The
+  # label is not declared here because compose ignores configuration on
+  # external volumes; setup-common.sh and the --adopt-existing-substrate
+  # flag are the canonical writers. See methodology/deployment-docker.md
+  # §3.5 for the full identity model.
   claude-state-architect:
     external: true
     name: claude-state-architect

@@ -93,9 +93,20 @@ else
 fi
 
 log "Ensuring shared docker volumes exist..."
+# claude-state-architect is the durable carrier of the substrate identity
+# (see deployment-docker.md §3.5). Label it at create time — Docker local
+# volumes do not support label updates after creation. claude-state-shared
+# is regenerated each verify, so it carries no identity label.
 for vol in claude-state-architect claude-state-shared; do
     if ! docker volume inspect "${vol}" >/dev/null 2>&1; then
-        docker volume create "${vol}" >/dev/null
+        if [ "${vol}" = "claude-state-architect" ]; then
+            : "${SUBSTRATE_ID:?SUBSTRATE_ID not set — substrate-id gate did not run}"
+            docker volume create \
+                --label "app.turtle-core.substrate-id=${SUBSTRATE_ID}" \
+                "${vol}" >/dev/null
+        else
+            docker volume create "${vol}" >/dev/null
+        fi
         log "Created docker volume '${vol}'."
     fi
 done
