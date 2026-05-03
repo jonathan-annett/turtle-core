@@ -7,16 +7,18 @@
 # See methodology/deployment-docker.md §3.5 for the model.
 
 # Constants. Kept here so other scripts (generate-keys.sh, setup-common.sh,
-# the adopt path) all reference the same values.
-SUBSTRATE_ID_VOLUME="claude-state-architect"
-SUBSTRATE_ID_LABEL_KEY="app.turtle-core.substrate-id"
+# the adopt path) all reference the same values. Use the `:=` form so the
+# test harness can target a fake volume / sentinel path without rewriting
+# the helper.
+: "${SUBSTRATE_ID_VOLUME:=claude-state-architect}"
+: "${SUBSTRATE_ID_LABEL_KEY:=app.turtle-core.substrate-id}"
 
 # Resolve a sane repo root. Callers may already have set repo_root; if so,
 # don't clobber it.
 if [ -z "${repo_root:-}" ]; then
     repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fi
-SUBSTRATE_ID_FILE="${repo_root}/.substrate-id"
+: "${SUBSTRATE_ID_FILE:=${repo_root}/.substrate-id}"
 
 # Generate a fresh UUID v4 in lower-case canonical form. Tries uuidgen first
 # (default on macOS, available on most Linux via uuid-runtime), then falls
