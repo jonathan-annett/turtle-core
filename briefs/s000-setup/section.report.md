@@ -1,5 +1,13 @@
 # SETUP-BRIEF.report — discharge report
 
+> **Filing note (s003).** This report originally lived at the repo
+> root as `SETUP-BRIEF.report.md`. It was moved to
+> `briefs/s000-setup/section.report.md` retroactively in section
+> s003 (spec-catchup) so the substrate's own history aligns with the
+> methodology's section-numbering convention. The body below is the
+> original report verbatim; any references it makes to "this file is
+> at the repo root" are historical and refer to its prior location.
+
 Implements `setup-scripts-brief.md` as a one-off commission outside the
 methodology. Recipient: a fresh terminal-based claude-code instance on
 Jonathan's box.
