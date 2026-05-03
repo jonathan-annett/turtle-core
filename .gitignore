@@ -13,6 +13,11 @@ infra/keys/human/*
 # Per-host overrides.
 .env
 
+# Substrate identity sentinel — generated on first setup, paired with a
+# matching label on the claude-state-architect docker volume. Per-clone,
+# never committed. See methodology/deployment-docker.md §3.5.
+.substrate-id
+
 # Editor / OS noise.
 *.log
 *.swp
