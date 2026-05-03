@@ -142,13 +142,14 @@ These are written to a `.pair-<section>.env` file (mode 0600, owned by the human
 
 ### 3.3 Daemon access controls
 
-The daemon enforces three checks on every incoming request, in order:
+The daemon enforces two checks on every incoming request, in order:
 
-1. **Network**: daemon binds to its compose-network interface (not `0.0.0.0`, not host-routable). Outside-network connections are not possible.
+1. **Network**: daemon binds to its compose-network interface (not `0.0.0.0`, not host-routable). The compose-project namespace isolates each planner/daemon pair from every other pair on the host; no other container — in any project — can route to this daemon's bound address.
 2. **Token**: every request must carry `Authorization: Bearer <token>` matching `COMMISSION_TOKEN`. Failure returns 401 immediately, before any logic runs.
-3. **Source IP** (defense in depth): daemon learns the planner's container IP at startup (from `getent hosts planner` or compose-DNS resolution) and rejects requests from any other source.
 
-The first check is the boundary that does the work; checks 2 and 3 are belt and braces.
+The first check is the boundary that does the work; the second is belt and braces.
+
+A third source-IP guard (resolving the planner's container IP via `getent hosts planner` and rejecting requests from any other source) lived here through s006 and was removed in s007. It was intended as defense in depth but was brittle in practice: the planner service has no `container_name` and no network alias on `agent-net` (deliberate, to keep multi-pair parallelism open), so reverse-DNS on the source IP returned the container ID rather than `planner`, the check closed-failed, and every commission was 503'd. Compose-project network isolation plus the bearer token are the real boundaries; the IP guard added no defensive value commensurate with its breakage rate.
 
 ### 3.4 Pairing script
 
@@ -422,7 +423,7 @@ COPY --chown=agent:agent daemon.js /home/agent/daemon.js
 CMD ["node", "/home/agent/daemon.js"]
 ```
 
-The reference `daemon.js` is ~150 lines: an Express server with the four endpoints from §4.2, child_process to spawn claude-code, better-sqlite3 for state, plus the source-IP and token middleware. Lives in the project-template repo, not in this spec doc.
+The reference `daemon.js` is ~150 lines: an Express server with the four endpoints from §4.2, child_process to spawn claude-code, better-sqlite3 for state, plus the bearer-token middleware (the s006-era source-IP middleware was removed in s007 — see §3.3). Lives in the project-template repo, not in this spec doc.
 
 ---
 

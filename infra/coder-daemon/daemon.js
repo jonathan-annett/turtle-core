@@ -5,14 +5,21 @@
 // container, captures the work, verifies the resulting task-branch tip
 // contains the expected report, and records the outcome in sqlite.
 //
-// Auth is layered:
+// Auth is two-layered:
 //   1. Network — bound to the container's own non-loopback IPv4 address on
-//      the agent-net bridge. Reachable only from the paired planner (which
-//      shares the bridge in the same compose namespace).
+//      the agent-net bridge. The compose-project namespace isolates each
+//      planner/daemon pair from every other pair on the host.
 //   2. Bearer token — every request must carry Authorization: Bearer
 //      $COMMISSION_TOKEN, set per pair by commission-pair.sh.
-//   3. Source IP — resolved from `getent hosts planner`. Refreshed lazily;
-//      defense in depth, not the primary boundary.
+//
+// A third source-IP guard lived here in s001–s006 (resolved via
+// `getent hosts planner`) but was removed in s007: the planner service
+// has no container_name and no network alias (deliberate, to keep
+// multi-pair parallelism open), so reverse-DNS on the source IP returned
+// the container ID rather than `planner`, the check closed-failed, and
+// every commission was 503'd. Compose-project network isolation plus the
+// bearer token are the real boundaries; the IP guard added no defensive
+// value commensurate with its breakage rate.
 
 'use strict';
 
@@ -41,11 +48,10 @@ if (!TOKEN || TOKEN.length < 16) {
     process.exit(2);
 }
 
-const DB_PATH      = '/data/commissions.db';
-const WORK_ROOT    = '/work';
-const LOG_ROOT     = '/data/logs';
-const MAIN_REMOTE  = 'git@git-server:/srv/git/main.git';
-const PLANNER_HOST = 'planner';
+const DB_PATH     = '/data/commissions.db';
+const WORK_ROOT   = '/work';
+const LOG_ROOT    = '/data/logs';
+const MAIN_REMOTE = 'git@git-server:/srv/git/main.git';
 
 fs.mkdirSync(WORK_ROOT, { recursive: true });
 fs.mkdirSync(LOG_ROOT,  { recursive: true });
@@ -136,35 +142,6 @@ function notifyTerminal(commission_id) {
 }
 
 // ---------------------------------------------------------------------------
-// Source-IP resolution. Cached, refreshed lazily.
-// ---------------------------------------------------------------------------
-
-let plannerIPCache = { addr: null, fetchedAt: 0 };
-const PLANNER_CACHE_MS = 60 * 1000;
-
-function resolvePlannerIP() {
-    const now = Date.now();
-    if (plannerIPCache.addr && (now - plannerIPCache.fetchedAt) < PLANNER_CACHE_MS) {
-        return plannerIPCache.addr;
-    }
-    try {
-        const out = childProc.execFileSync(
-            'getent', ['hosts', PLANNER_HOST],
-            { encoding: 'utf8', timeout: 2000 }
-        ).trim();
-        // Format: "<addr> <hostname>"
-        const addr = out.split(/\s+/)[0];
-        if (addr) {
-            plannerIPCache = { addr, fetchedAt: now };
-            return addr;
-        }
-    } catch (_) {
-        // not yet resolvable — planner may not be up yet
-    }
-    return null;
-}
-
-// ---------------------------------------------------------------------------
 // Express app
 // ---------------------------------------------------------------------------
 
@@ -188,23 +165,6 @@ app.use((req, res, next) => {
     }
     if (mismatch !== 0) {
         return res.status(401).json({ error: 'invalid token' });
-    }
-    next();
-});
-
-// Source-IP check.
-app.use((req, res, next) => {
-    const expected = resolvePlannerIP();
-    if (!expected) {
-        return res.status(503).json({
-            error: 'planner host not yet resolvable; daemon source-IP guard is closed-fail'
-        });
-    }
-    const seen = (req.ip || '').replace(/^::ffff:/, '');
-    if (seen !== expected) {
-        return res.status(403).json({
-            error: `source IP ${seen} does not match expected planner IP ${expected}`
-        });
     }
     next();
 });
