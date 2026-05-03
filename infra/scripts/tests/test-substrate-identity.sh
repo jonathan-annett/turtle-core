@@ -39,6 +39,9 @@ note() { printf "${YELLOW}note${NC}: %s\n" "$*"; }
 hr()   { printf '%.0s-' {1..70}; printf '\n'; }
 
 cleanup_test() {
+    docker ps -a --format '{{.Names}}' \
+        | grep -E "^turtle-core-test-arch-${test_pid}$" \
+        | xargs -r docker rm -f >/dev/null 2>&1 || true
     docker volume ls --format '{{.Name}}' \
         | grep -E "^${test_volume}(-rotate-[0-9]+)?$" \
         | xargs -r docker volume rm >/dev/null 2>&1 || true
@@ -96,11 +99,23 @@ run_in_isolated() {
         export repo_root="${tree}"
         export SUBSTRATE_ID_VOLUME="${test_volume}"
         export SUBSTRATE_ID_FILE="${tree}/.substrate-id"
-        # Stub 'compose stop' so substrate_id_adopt's stop-architect call
-        # does not fight a real compose project. Other docker calls are
-        # passed through.
+        # Stub 'compose stop' / 'compose rm' so substrate_id_adopt's
+        # architect-shutdown sequence does not fight a real compose project.
+        # If TEST_ARCH_CONTAINER is set, redirect those calls to the named
+        # standalone container so the stop+rm sequence is actually exercised
+        # against a real container holding the test volume. Other docker
+        # calls are passed through.
         docker() {
             if [ "${1:-}" = "compose" ] && [ "${2:-}" = "stop" ]; then
+                if [ -n "${TEST_ARCH_CONTAINER:-}" ]; then
+                    command docker stop "${TEST_ARCH_CONTAINER}" >/dev/null 2>&1 || true
+                fi
+                return 0
+            fi
+            if [ "${1:-}" = "compose" ] && [ "${2:-}" = "rm" ]; then
+                if [ -n "${TEST_ARCH_CONTAINER:-}" ]; then
+                    command docker rm -f "${TEST_ARCH_CONTAINER}" >/dev/null 2>&1 || true
+                fi
                 return 0
             fi
             command docker "$@"
@@ -278,6 +293,53 @@ else
     fail "adoption: expected refusal on pre-existing sentinel"
 fi
 docker volume rm "${test_volume}" >/dev/null
+
+# ---------------------------------------------------------------------------
+# Scenario 8 (regression — adopt-fix): adoption succeeds when a stopped-but-
+# not-removed container still holds a reference to the architect volume.
+# Reproduces the bug surfaced during operator-side adoption on hello-turtle:
+# 'docker compose stop' halts the container but doesn't remove it, and the
+# stopped container's volume reference blocked 'docker volume rm'. The fix
+# inserts 'docker compose rm -f architect' between stop and volume rm.
+# ---------------------------------------------------------------------------
+hr; echo "Scenario 8: adoption with stopped-but-present architect container"
+tree=$(make_test_tree with-keys)
+docker volume create "${test_volume}" >/dev/null
+docker run --rm -v "${test_volume}:/dst" debian:bookworm-slim \
+    sh -c 'echo content >/dst/marker && mkdir -p /dst/sub && echo nested >/dst/sub/nested && chown -R 1000:1000 /dst' \
+    >/dev/null
+test_arch="turtle-core-test-arch-${test_pid}"
+docker create --name "${test_arch}" -v "${test_volume}:/data" \
+    debian:bookworm-slim sleep infinity >/dev/null
+docker start "${test_arch}" >/dev/null
+docker stop "${test_arch}" >/dev/null  # mimic 'compose stop architect': stopped, not removed
+out=$(TEST_ARCH_CONTAINER="${test_arch}" run_in_isolated "${tree}" substrate_id_adopt 2>&1)
+echo "${out}"
+new_id=$(cat "${tree}/.substrate-id" 2>/dev/null || echo "")
+labels=$(docker volume inspect "${test_volume}" --format '{{json .Labels}}' 2>/dev/null || echo "")
+content_marker=$(docker run --rm -v "${test_volume}:/src:ro" debian:bookworm-slim cat /src/marker 2>/dev/null || echo "")
+content_nested=$(docker run --rm -v "${test_volume}:/src:ro" debian:bookworm-slim cat /src/sub/nested 2>/dev/null || echo "")
+container_gone=0
+docker inspect "${test_arch}" >/dev/null 2>&1 || container_gone=1
+
+if echo "${out}" | grep -q "Adoption complete." && \
+   echo "${out}" | grep -q "EXIT=0" && \
+   [ -n "${new_id}" ] && \
+   echo "${labels}" | grep -q "${new_id}" && \
+   [ "${content_marker}" = "content" ] && \
+   [ "${content_nested}" = "nested" ] && \
+   [ "${container_gone}" = "1" ]; then
+    pass "adoption (stopped container holding volume): completed, container removed, contents preserved"
+else
+    fail "adoption (stopped container holding volume): expected completion despite volume reference"
+    echo "  new_id='${new_id}'"
+    echo "  labels='${labels}'"
+    echo "  marker='${content_marker}'"
+    echo "  nested='${content_nested}'"
+    echo "  container_gone='${container_gone}'"
+fi
+docker rm -f "${test_arch}" >/dev/null 2>&1 || true
+docker volume rm "${test_volume}" >/dev/null 2>&1 || true
 
 hr; printf "Summary: ${GREEN}%d passed${NC}, " "${pass_count}"
 if [ "${fail_count}" -gt 0 ]; then

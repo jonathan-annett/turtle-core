@@ -327,6 +327,12 @@ EOF
     docker compose stop architect >/dev/null 2>&1 || \
         _log "WARN: 'docker compose stop architect' returned non-zero — proceeding anyway."
 
+    # A stopped-but-not-removed container still holds a reference to its
+    # volumes, which prevents 'docker volume rm' below. Remove it now.
+    # Idempotent: rm -f against an already-absent container is a no-op.
+    docker compose rm -f architect >/dev/null 2>&1 || \
+        _log "WARN: 'docker compose rm -f architect' returned non-zero — proceeding anyway."
+
     local scratch="${SUBSTRATE_ID_VOLUME}-rotate-$$"
     _log "Creating scratch volume ${scratch}..."
     docker volume create "${scratch}" >/dev/null \
