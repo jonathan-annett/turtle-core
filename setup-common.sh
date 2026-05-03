@@ -211,6 +211,15 @@ provision_auth() {
                 chmod 600 /dst/.credentials.json
                 chown 1000:1000 /dst/.credentials.json
             fi
+            # .claude.json carries claude-code config + project state; its
+            # presence is what stops planners / coders / auditors from
+            # being treated as fresh installs that need OAuth login. See
+            # s007 brief 7.a.
+            if [ -f /src/.claude.json ]; then
+                cp /src/.claude.json /dst/.claude.json
+                chmod 600 /dst/.claude.json
+                chown 1000:1000 /dst/.claude.json
+            fi
         '
 }
 provision_auth

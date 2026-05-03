@@ -94,6 +94,15 @@ if docker run --rm \
     sh -c '
         chown 1000:1000 /dst
         chmod 0700 /dst
+        # .claude.json is propagated whenever it exists in the architect
+        # volume, independent of credential presence. Without it,
+        # ephemeral claude-code sessions are treated as fresh installs
+        # and prompt for OAuth login (s007 brief 7.a).
+        if [ -f /src/.claude.json ]; then
+            cp /src/.claude.json /dst/.claude.json
+            chmod 600 /dst/.claude.json
+            chown 1000:1000 /dst/.claude.json
+        fi
         if [ -f /src/.credentials.json ]; then
             cp /src/.credentials.json /dst/.credentials.json
             chmod 600 /dst/.credentials.json

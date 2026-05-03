@@ -18,6 +18,13 @@ if [ -f /home/agent/.ssh/id_ed25519 ]; then
     export GIT_SSH_COMMAND="ssh -i /home/agent/.ssh-rw/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 fi
 
+# .claude.json lives inside the claude-state-shared volume. Symlink the
+# container-layer path to it (migrating first if a regular file exists).
+if [ -f /home/agent/.claude.json ] && [ ! -L /home/agent/.claude.json ]; then
+    mv /home/agent/.claude.json /home/agent/.claude/.claude.json
+fi
+ln -sfn /home/agent/.claude/.claude.json /home/agent/.claude.json
+
 cd /
 
 if [ ! -d /work/.git ]; then
@@ -40,6 +47,18 @@ git -C /work    config user.name  "auditor"
 git -C /work    config user.email "auditor@substrate.local"
 git -C /auditor config user.name  "auditor"
 git -C /auditor config user.email "auditor@substrate.local"
+
+# Role anchor: symlink CLAUDE.md to the auditor methodology guide so
+# the auditor's claude-code session loads it automatically. The
+# auditor reads its audit brief from /work (read-only main clone) and
+# writes the audit report into /auditor; the role anchor lives at
+# /work/CLAUDE.md, where claude-code looks first. Idempotent; repo-
+# local via .git/info/exclude (the git-server hook would reject any
+# auditor push to main anyway).
+ln -sfn /methodology/auditor-guide.md /work/CLAUDE.md
+if ! grep -qxF 'CLAUDE.md' /work/.git/info/exclude 2>/dev/null; then
+    printf 'CLAUDE.md\n' >> /work/.git/info/exclude
+fi
 
 cat <<'EOF'
 

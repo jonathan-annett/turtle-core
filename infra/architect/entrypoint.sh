@@ -22,6 +22,16 @@ if [ -f /home/agent/.ssh/id_ed25519 ]; then
     export GIT_SSH_COMMAND="ssh -i /home/agent/.ssh-rw/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 fi
 
+# claude-code stores its config + project state in ~/.claude.json (a sibling
+# to ~/.claude/, not inside it). The volume mounts at /home/agent/.claude/,
+# so without intervention .claude.json lands in the writable container layer
+# and is lost across container recreation. Migrate any existing regular file
+# into the volume, then symlink. Idempotent.
+if [ -f /home/agent/.claude.json ] && [ ! -L /home/agent/.claude.json ]; then
+    mv /home/agent/.claude.json /home/agent/.claude/.claude.json
+fi
+ln -sfn /home/agent/.claude/.claude.json /home/agent/.claude.json
+
 cd /
 
 if [ ! -d /work/.git ]; then
@@ -42,6 +52,18 @@ git -C /work config user.name  "architect"
 git -C /work config user.email "architect@substrate.local"
 [ -d /auditor/.git ] && git -C /auditor config user.name  "architect"
 [ -d /auditor/.git ] && git -C /auditor config user.email "architect@substrate.local"
+
+# Role anchor: claude-code reads CLAUDE.md from the working tree on
+# session start and treats it as the agent's prompt header. Symlinking
+# the role guide makes the architect load its methodology guide
+# automatically, no human seed prompt needed. Idempotent; the symlink
+# stays repo-local via .git/info/exclude (the architect's git-server
+# update hook would reject CLAUDE.md anyway, but excluding it keeps
+# 'git status' clean).
+ln -sfn /methodology/architect-guide.md /work/CLAUDE.md
+if ! grep -qxF 'CLAUDE.md' /work/.git/info/exclude 2>/dev/null; then
+    printf 'CLAUDE.md\n' >> /work/.git/info/exclude
+fi
 
 cat <<'EOF'
 

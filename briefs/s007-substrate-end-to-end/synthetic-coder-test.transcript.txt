@@ -1,0 +1,59 @@
+----------------------------------------------------------------------
+Phase 0: prereqs
+PASS: all required images present
+----------------------------------------------------------------------
+Phase 1: scaffold scratch substrate
+PASS: generated scratch ssh keys
+PASS: created scratch network 'turtle-core-test-s007e2e-23324-net'
+PASS: created scratch volumes (mount-roots normalised)
+PASS: wrote scratch compose + env
+----------------------------------------------------------------------
+Phase 2: scratch git-server + bare repos
+ Container turtle-core-test-s007e2e-23324-git-server Creating 
+ Container turtle-core-test-s007e2e-23324-git-server Created 
+ Container turtle-core-test-s007e2e-23324-git-server Starting 
+ Container turtle-core-test-s007e2e-23324-git-server Started 
+PASS: git-server up, main.git + auditor.git initialised
+----------------------------------------------------------------------
+Phase 3: architect entrypoint (7.a + 7.c symlinks)
+ Container turtle-core-test-s007e2e-23324-git-server Running 
+ Container turtle-core-test-s007e2e-23324-architect Creating 
+ Container turtle-core-test-s007e2e-23324-architect Created 
+ Container turtle-core-test-s007e2e-23324-architect Starting 
+ Container turtle-core-test-s007e2e-23324-architect Started 
+PASS: architect: ~/.claude.json is a symlink → /home/agent/.claude/.claude.json
+PASS: architect: /work/CLAUDE.md is a symlink → /methodology/architect-guide.md
+PASS: architect: CLAUDE.md is in /work/.git/info/exclude
+PASS: architect: regular ~/.claude.json migrated into volume on restart, symlink restored
+----------------------------------------------------------------------
+Phase 4: seed main.git with a synthetic section/task brief
+PASS: seeded section.brief.md + t001-stub.brief.md on origin/main
+PASS: created section/test-section on origin
+----------------------------------------------------------------------
+Phase 5: coder-daemon + .claude.json propagation
+PASS: .claude.json propagated into shared volume (architect → shared)
+ Container turtle-core-test-s007e2e-23324-daemon Creating 
+ Container turtle-core-test-s007e2e-23324-daemon Created 
+ Container turtle-core-test-s007e2e-23324-daemon Starting 
+ Container turtle-core-test-s007e2e-23324-daemon Started 
+PASS: coder-daemon up and listening
+PASS: stub claude installed at /usr/local/bin/claude inside daemon
+----------------------------------------------------------------------
+Phase 6: planner entrypoint + synthetic commission
+ Container turtle-core-test-s007e2e-23324-daemon Running 
+ Container turtle-core-test-s007e2e-23324-planner-1 Creating 
+ Container turtle-core-test-s007e2e-23324-planner-1 Created 
+ Container turtle-core-test-s007e2e-23324-planner-1 Starting 
+ Container turtle-core-test-s007e2e-23324-planner-1 Started 
+PASS: planner up (cid=c44f11b2f97a)
+PASS: planner: ~/.claude.json is a symlink → /home/agent/.claude/.claude.json
+PASS: planner: /work/CLAUDE.md is a symlink → /methodology/planner-guide.md
+PASS: planner: .claude.json present and non-empty in shared volume
+note: POSTing /commission from planner via curl
+PASS: POST /commission accepted (commission_id=14db794c, no 503)
+note: polling /commission/14db794c.../wait
+PASS: synthetic-coder commission completed: status=complete, exit=0, report at briefs/test-section/t001-stub.report.md
+PASS: report file present at task-branch tip on origin
+----------------------------------------------------------------------
+Summary: 22 passed, 0 failed
+note: tearing down turtle-core-test-s007e2e-23324...
