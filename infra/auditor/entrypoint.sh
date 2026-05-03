@@ -48,6 +48,18 @@ git -C /work    config user.email "auditor@substrate.local"
 git -C /auditor config user.name  "auditor"
 git -C /auditor config user.email "auditor@substrate.local"
 
+# Role anchor: symlink CLAUDE.md to the auditor methodology guide so
+# the auditor's claude-code session loads it automatically. The
+# auditor reads its audit brief from /work (read-only main clone) and
+# writes the audit report into /auditor; the role anchor lives at
+# /work/CLAUDE.md, where claude-code looks first. Idempotent; repo-
+# local via .git/info/exclude (the git-server hook would reject any
+# auditor push to main anyway).
+ln -sfn /methodology/auditor-guide.md /work/CLAUDE.md
+if ! grep -qxF 'CLAUDE.md' /work/.git/info/exclude 2>/dev/null; then
+    printf 'CLAUDE.md\n' >> /work/.git/info/exclude
+fi
+
 cat <<'EOF'
 
 ================================================================================

@@ -352,6 +352,32 @@ async function runCoder(c) {
             return finish('failed', { exit_code: null, error: `brief not found at ${c.brief_path} on ${c.section_branch}` });
         }
 
+        // 2b. Write the coder CLAUDE.md role anchor (s007 7.c). Unlike the
+        // other roles, coders have no canonical methodology guide — the
+        // anchor is short and inline. Excluded from the working tree's
+        // git index so it never lands in the task-branch tip.
+        const coderClaudeMd = [
+            '# You are the coder.',
+            '',
+            `Your task brief is at ${c.brief_path}. Read it. Do exactly what it says.`,
+            'Commit your work and a task report to your task branch, open a PR',
+            'back to the section branch, then exit.',
+            '',
+            'You operate on the brief alone. You do not commission other agents.',
+            'Your tool surface is constrained by `--allowedTools` from the brief\'s',
+            '"Required tool surface" field; out-of-list actions deny.',
+            '',
+            'Discharge when done.',
+            '',
+        ].join('\n');
+        fs.writeFileSync(path.join(workdir, 'CLAUDE.md'), coderClaudeMd);
+        const excludePath = path.join(workdir, '.git', 'info', 'exclude');
+        let excludeContent = '';
+        try { excludeContent = fs.readFileSync(excludePath, 'utf8'); } catch (_) {}
+        if (!/^CLAUDE\.md$/m.test(excludeContent)) {
+            fs.appendFileSync(excludePath, 'CLAUDE.md\n');
+        }
+
         // 3. Parse the brief's "Required tool surface" field — spec §7.3,
         // deployment-doc §4.5. A missing or unparseable field fails the
         // commission rather than defaulting to a permissive list.

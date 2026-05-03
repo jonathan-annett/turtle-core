@@ -53,6 +53,18 @@ git -C /work config user.email "architect@substrate.local"
 [ -d /auditor/.git ] && git -C /auditor config user.name  "architect"
 [ -d /auditor/.git ] && git -C /auditor config user.email "architect@substrate.local"
 
+# Role anchor: claude-code reads CLAUDE.md from the working tree on
+# session start and treats it as the agent's prompt header. Symlinking
+# the role guide makes the architect load its methodology guide
+# automatically, no human seed prompt needed. Idempotent; the symlink
+# stays repo-local via .git/info/exclude (the architect's git-server
+# update hook would reject CLAUDE.md anyway, but excluding it keeps
+# 'git status' clean).
+ln -sfn /methodology/architect-guide.md /work/CLAUDE.md
+if ! grep -qxF 'CLAUDE.md' /work/.git/info/exclude 2>/dev/null; then
+    printf 'CLAUDE.md\n' >> /work/.git/info/exclude
+fi
+
 cat <<'EOF'
 
 ================================================================================

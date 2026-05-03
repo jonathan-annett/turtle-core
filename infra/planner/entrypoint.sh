@@ -34,6 +34,14 @@ fi
 git -C /work config user.name  "planner"
 git -C /work config user.email "planner@substrate.local"
 
+# Role anchor: symlink CLAUDE.md to the planner methodology guide so the
+# planner's claude-code session loads it automatically. Idempotent;
+# kept repo-local via .git/info/exclude.
+ln -sfn /methodology/planner-guide.md /work/CLAUDE.md
+if ! grep -qxF 'CLAUDE.md' /work/.git/info/exclude 2>/dev/null; then
+    printf 'CLAUDE.md\n' >> /work/.git/info/exclude
+fi
+
 cat <<EOF
 
 ================================================================================
