@@ -157,13 +157,23 @@ provision_auth() {
     if [ -f "${host_creds}" ]; then
         log "Found host credentials at ${host_creds} — using Path A (host-copy)."
         # Copy file-to-file via a one-shot helper container so the host
-        # never has to read the credentials into a shell variable.
+        # never has to read the credentials into a shell variable. Also
+        # normalise the architect volume's mount-root ownership: when this
+        # helper is the first container to mount an empty claude-state-
+        # architect, Docker creates /dst as root:root 0755 in the volume,
+        # which would persist and prevent claude-code (running as agent)
+        # from writing rotated OAuth tokens later. The chown/chmod is
+        # idempotent and retroactively repairs Path A architect volumes
+        # that pre-date the s006 fix. The Path B architect avoids this
+        # bug via the agent-base Dockerfile pre-create.
         docker run --rm \
             -v "${HOME}/.claude:/host-claude:ro" \
             -v claude-state-architect:/dst \
             debian:bookworm-slim \
             sh -c '
                 set -e
+                chown 1000:1000 /dst
+                chmod 0700 /dst
                 cp /host-claude/.credentials.json /dst/.credentials.json
                 chmod 600 /dst/.credentials.json
                 chown 1000:1000 /dst/.credentials.json
@@ -182,11 +192,20 @@ provision_auth() {
     # volume into the shared volume that ephemeral roles inherit. This is a
     # no-op for Path B until the user runs 'claude auth login'; in that case
     # they should re-run ./verify.sh afterwards to refresh.
+    #
+    # Always normalise the shared volume's mount-root ownership and mode,
+    # whether or not creds are present. Same rationale as verify.sh §6:
+    # this helper is the first writer to claude-state-shared, and without
+    # the chown/chmod the volume's mount root persists as root:root 0755,
+    # which breaks claude-code writes from ephemerals. Idempotent and
+    # retroactive.
     docker run --rm \
         -v claude-state-architect:/src:ro \
         -v claude-state-shared:/dst \
         debian:bookworm-slim \
         sh -c '
+            chown 1000:1000 /dst
+            chmod 0700 /dst
             if [ -f /src/.credentials.json ]; then
                 cp /src/.credentials.json /dst/.credentials.json
                 chmod 600 /dst/.credentials.json
@@ -227,7 +246,14 @@ cat <<'EOF'
 
   First steps for the human:
     1. ./attach-architect.sh
-    2. Inside the architect: 'claude' (or 'claude auth login' first if Path B)
+    2. Inside the architect:
+         Path A — host-creds were pre-loaded; just run 'claude' and you
+                  are logged in.
+         Path B — run 'claude auth login' once. Then detach (Ctrl-P
+                  Ctrl-Q) and run './verify.sh' on the host to
+                  propagate credentials into the shared volume.
+                  Skipping this step leaves planners / coders /
+                  auditors un-authed — every commission will fail.
     3. With the architect, draft TOP-LEVEL-PLAN.md and the first section brief.
     4. Commit those to main; the architect's git-server hook allows it.
     5. Exit the architect; run ./commission-pair.sh <section-slug> to start work.

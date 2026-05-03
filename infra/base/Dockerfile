@@ -24,9 +24,17 @@ RUN install -d -m 0755 /etc/apt/keyrings \
 
 # Unprivileged user; UID 1000 to match the typical host UID and avoid
 # named-volume permission surprises.
+#
+# /home/agent/.claude is pre-created (agent-owned, mode 0700) so that
+# Docker preserves that ownership when initialising an empty named
+# volume mounted at this path. Without the pre-create, Docker creates
+# the mount root as root:root 0755 on first attach, which silently
+# breaks `claude /login` (the OAuth handshake completes server-side
+# but the credential-write returns EACCES). See briefs/s006-auth-flow.
 RUN useradd -m -s /bin/bash -u 1000 agent \
-    && mkdir -p /work \
-    && chown agent:agent /work
+    && mkdir -p /work /home/agent/.claude \
+    && chown agent:agent /work /home/agent/.claude \
+    && chmod 0700 /home/agent/.claude
 
 # System-wide ssh client config: every container in the substrate talks to
 # the git-server service over the compose bridge network. The bridge is
