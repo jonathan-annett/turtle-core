@@ -15,6 +15,14 @@ if [ -f /home/agent/.ssh/id_ed25519 ]; then
     export GIT_SSH_COMMAND="ssh -i /home/agent/.ssh-rw/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 fi
 
+# Coder subshells run as children of this daemon, sharing its filesystem.
+# .claude.json lives inside the claude-state-shared volume; symlink so
+# claude-code in the subshell finds it at the canonical path.
+if [ -f /home/agent/.claude.json ] && [ ! -L /home/agent/.claude.json ]; then
+    mv /home/agent/.claude.json /home/agent/.claude/.claude.json
+fi
+ln -sfn /home/agent/.claude/.claude.json /home/agent/.claude.json
+
 git config --global user.name  "coder"
 git config --global user.email "coder@substrate.local"
 

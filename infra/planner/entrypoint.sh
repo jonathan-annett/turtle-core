@@ -16,6 +16,14 @@ if [ -f /home/agent/.ssh/id_ed25519 ]; then
     export GIT_SSH_COMMAND="ssh -i /home/agent/.ssh-rw/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 fi
 
+# .claude.json lives inside the claude-state-shared volume (carried in via
+# verify.sh / setup-common.sh's architect→shared sync). Symlink the
+# container-layer path to it. Migrate first if a regular file is present.
+if [ -f /home/agent/.claude.json ] && [ ! -L /home/agent/.claude.json ]; then
+    mv /home/agent/.claude.json /home/agent/.claude/.claude.json
+fi
+ln -sfn /home/agent/.claude/.claude.json /home/agent/.claude.json
+
 cd /
 
 if [ ! -d /work/.git ]; then
