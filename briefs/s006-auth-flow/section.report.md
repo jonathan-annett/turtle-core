@@ -172,9 +172,12 @@ observed:
 ./attach-architect.sh
 > claude auth login                  # OAuth flow; should now write creds
 > [Ctrl-P Ctrl-Q to detach]
-./verify.sh                          # should report 7 ok / 0 fail,
+./verify.sh                          # should report 10 ok / 0 fail,
                                      # including "architect creds present
                                      # and synced into shared volume"
+                                     # (pre-login state would be 9 ok with
+                                     # the creds-sync step in the rc=99
+                                     # "[..] not yet present" branch)
 ./commission-pair.sh s001-cli        # planner should start logged-in
                                      # — no "claude auth login" needed
                                      # inside the planner container
@@ -189,8 +192,8 @@ Acceptance criteria for the gate:
   `agent:agent 700`).
 - `claude auth login` inside the architect succeeds and the next
   prompt does NOT print "Not logged in."
-- `verify.sh` after login reports `architect creds present and
-  synced into shared volume` (no rc=99).
+- `verify.sh` after login reports 10 ok / 0 fail with `architect
+  creds present and synced into shared volume` (no rc=99).
 - A commissioned planner runs `claude auth status` and reports
   `loggedIn: true`.
 - No manual `docker exec -u root … chown` is required at any step.
