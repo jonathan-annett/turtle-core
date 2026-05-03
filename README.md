@@ -203,10 +203,16 @@ storage, etc.), setup proceeds with the architect un-authed. After setup:
 ```bash
 ./attach-architect.sh
 claude auth login        # interactive OAuth; runs once
+# detach with Ctrl-P Ctrl-Q (or `exit` to stop the container)
+./verify.sh              # propagates credentials into the shared volume
 ```
 
-Your credentials persist in the `claude-state-architect` volume across
-container restarts.
+The architect's credentials persist in the `claude-state-architect`
+volume across container restarts. The `./verify.sh` step is required
+on first login: it copies `.credentials.json` from the architect
+volume into `claude-state-shared` so ephemeral planners, coders, and
+auditors inherit the auth. Skipping it leaves every subsequent
+commission un-authed.
 
 ### Refreshing ephemeral-role credentials
 
