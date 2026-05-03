@@ -214,6 +214,32 @@ docker compose -p "$project" run --rm auditor
 
 Auditor reads the audit brief from the main repo (it has a fresh clone), produces the audit report into the auditor repo, exits.
 
+### 3.5 Substrate identity
+
+A substrate is a single coupled set of artefacts: a working tree on the host (with per-role SSH keys under `infra/keys/<role>/`) and a set of Docker volumes (auth state, bare repos, container working volumes). The pair is meaningful only when the tree and the Docker state belong to the same substrate. This is normally true by construction — but a host may legitimately host more than one tree (a substrate-development clone alongside a real substrate; two unrelated projects), and Docker state is global per host. A setup invocation that runs against the wrong combination of tree and Docker state can silently mutate one side away from the other (e.g. by regenerating per-role keys when host directories happen to be empty) without producing an obvious failure.
+
+To make the tree↔Docker pairing checkable, every substrate carries an explicit identity:
+
+- **`.substrate-id`** — a file at the repo root containing a single line: a UUID v4. Mode `0644`. Generated at first-time setup. Gitignored (per-clone, never committed). Removing this file is operator-visible because it disables every subsequent setup invocation until either a new install, an adoption, or a deliberate reset takes place.
+
+- **`app.turtle-core.substrate-id=<uuid>`** — a label on the `claude-state-architect` Docker volume, set at volume-create time (Docker local volumes do not support label updates after creation; `docker volume update` exists only for cluster volumes). The architect volume is the natural carrier because it is the substrate's most stable, owned-once artefact.
+
+Setup checks both before doing any state mutation. The five outcomes of the on-disk × in-Docker matrix are:
+
+| `.substrate-id` on disk | architect volume | architect-volume label | Setup behavior |
+|---|---|---|---|
+| absent | absent | n/a | Fresh install: generate UUID, write sentinel, create labelled volume. |
+| absent | present | absent or any | Fail loudly: this tree does not know about the live Docker state. Suggest `--adopt-existing-substrate` or `docker compose down -v` for a clean slate. |
+| present | absent | n/a | Fail loudly: tree claims a substrate that has no live Docker state. Suggest `--adopt-existing-substrate` (if intentional) or `rm .substrate-id` (for fresh install). |
+| present | present | mismatched | Fail loudly: tree and Docker state belong to different substrates. Surface both UUIDs; suggest `docker compose down -v` (wrong tree present) or restoring the right tree. |
+| present | present | matching | Proceed: ordinary re-setup. |
+
+The check is the first state-mutation gate in setup. Anything that runs before it (platform detection, prereq verification, the `~/.docker` ownership preflight from s002) is read-only; everything after it (key generation, volume create, image build, `compose up`) is gated by it.
+
+`infra/scripts/generate-keys.sh` is no longer a standalone-safe entry point — it inherits the same gate via an environment-variable contract with the setup scripts. Invoking it directly bails out with a message redirecting the user to `setup-linux.sh` / `setup-mac.sh`, which run the proper diagnosis.
+
+The migration command `--adopt-existing-substrate` (on both setup-linux.sh and setup-mac.sh) covers the one-shot transition for substrates that predate the sentinel: it generates a UUID, writes the sentinel, and recreates `claude-state-architect` with the label while preserving its contents (the architect is briefly stopped, the volume is rotated through a helper container, and the architect is restarted). The flag refuses to run if `.substrate-id` already exists.
+
 ---
 
 ## 4. The commission daemon

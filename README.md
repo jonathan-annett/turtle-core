@@ -77,6 +77,42 @@ Not yet directly supported by a dedicated script. Workaround:
 
 A native PowerShell entry point may be added later.
 
+### Optional: `--adopt-existing-substrate`
+
+If you ran setup before the substrate-identity mechanism existed (i.e.
+your `claude-state-architect` Docker volume was created without the
+`app.turtle-core.substrate-id` label), the first plain re-run of
+`./setup-linux.sh` or `./setup-mac.sh` will fail loudly: the gate sees
+no `.substrate-id` on disk and a labelless volume in Docker, and it
+cannot tell which substrate the volume belongs to.
+
+Migrate by running:
+
+```bash
+./setup-linux.sh --adopt-existing-substrate      # Linux / Crostini / WSL2
+./setup-mac.sh   --adopt-existing-substrate      # macOS
+```
+
+The flag is a **one-shot migration tool**. It mints a new UUID, writes
+`.substrate-id` at the repo root, and rotates `claude-state-architect`
+through a scratch volume so the new label can be applied (Docker local
+volumes do not allow label updates after creation). The architect
+container is briefly stopped during rotation and restarted as the rest
+of setup runs normally. After the flag completes, every subsequent
+plain `./setup-linux.sh` / `./setup-mac.sh` will see matching state
+and proceed quietly.
+
+The flag refuses to run if `.substrate-id` already exists, if the
+`claude-state-architect` volume is missing, if the volume is already
+labelled, or if `infra/keys/<role>/id_ed25519` is missing for any
+role — the last is brief s004's "sufficient evidence of an existing
+substrate" check.
+
+For a fresh install with no prior substrate state on the host, do
+**not** use this flag — plain `./setup-linux.sh` / `./setup-mac.sh`
+will detect the absent volume, generate a new identity, and label
+the volume at create time.
+
 ### Optional: `--install-docker`
 
 If you don't already have Docker on the host, the repo ships an
@@ -197,6 +233,45 @@ the env var when set.
 
 ---
 
+## Substrate identity
+
+A substrate is a coupled pair: a working tree on the host (with per-role
+SSH keys under `infra/keys/`) and a set of Docker volumes (auth state,
+bare repos, working volumes). The pair is meaningful only when both
+sides belong to the same substrate. A host may legitimately host more
+than one tree (e.g. a substrate-development clone alongside a real
+substrate), and Docker state is global per host — running setup against
+the wrong combination of tree and Docker state can silently desync them.
+
+To make the pairing checkable, every substrate carries an explicit
+identity:
+
+- **`.substrate-id`** at the repo root — a single line containing a
+  UUID v4. Generated on first-time setup. Mode 0644. Gitignored
+  (per-clone, never committed).
+- **`app.turtle-core.substrate-id=<uuid>`** as a label on the
+  `claude-state-architect` Docker volume — set at volume creation
+  time. The architect volume is the durable, owned-once carrier.
+
+Setup checks both before any state mutation. Outcomes:
+
+| `.substrate-id` | architect volume | Setup behavior |
+|---|---|---|
+| absent | absent | Fresh install — generate UUID, write sentinel, create labelled volume. |
+| present | present, label matches | Ordinary re-setup — proceed quietly. |
+| absent | present | Fail loudly — tree is naive of running substrate. Use `--adopt-existing-substrate` if intentional, or `docker compose down -v` for a clean slate. |
+| present | absent | Fail loudly — tree describes a substrate with no live Docker state. `rm .substrate-id` for fresh install, or restore from backup. |
+| present | present, label mismatch | Fail loudly — tree and Docker state are from different substrates. |
+
+For the model in full, see
+[`methodology/deployment-docker.md`](methodology/deployment-docker.md) §3.5.
+
+`infra/scripts/generate-keys.sh` is no longer safe to run standalone
+in inconsistent-state cases — it inherits the same gate. Run setup,
+which performs proper diagnosis, instead of calling it directly.
+
+---
+
 ## Role lifecycle (one-line summary; full detail in `methodology/`)
 
 1. Architect produces `TOP-LEVEL-PLAN.md` and a section brief, commits to
@@ -237,7 +312,7 @@ to dispose the daemon and the ephemeral env file.
 The daemon's HTTP API (`POST /commission`, `GET /commission/{id}`,
 `GET /commission/{id}/wait`, `POST /commission/{id}/cancel`,
 `GET /commissions`) is documented in
-[`methodology/deployment-docker.md`](methodology/agent-orchestration-spec.md)
+[`methodology/deployment-docker.md`](methodology/deployment-docker.md)
 §4.
 
 ### Auditor (per audit)
@@ -258,6 +333,71 @@ to have the architect ferry the report into `main`.
 
 Install whatever it names. The script does not provision tools; it only
 verifies them.
+
+### Setup says my tree and Docker state are from different substrates
+
+The `.substrate-id` at the repo root and the `app.turtle-core.substrate-id`
+label on the `claude-state-architect` Docker volume disagree. The tree
+and the Docker state belong to different substrates — running setup
+would have desynced one from the other, so it refused.
+
+Diagnose the volume's claimed identity:
+
+```bash
+docker volume inspect claude-state-architect --format '{{json .Labels}}'
+```
+
+Compare to your sentinel:
+
+```bash
+cat .substrate-id
+```
+
+Resolve by ONE of:
+
+- Switch to the tree whose `.substrate-id` matches the volume's label.
+- Tear down the wrong substrate's Docker state and start fresh:
+  `docker compose down -v --remove-orphans`
+- If you are deliberately re-pointing this tree at a different substrate
+  (rare), `rm .substrate-id` and consider whether
+  `--adopt-existing-substrate` fits.
+
+### Setup says I have Docker state for a substrate this tree doesn't know about
+
+The `claude-state-architect` volume exists on this host, but this tree
+has no `.substrate-id`. The tree is naive of the running substrate;
+running setup here would silently regenerate per-role keys and fight
+the running substrate for the same volumes.
+
+Resolve by ONE of:
+
+- `./setup-linux.sh --adopt-existing-substrate` (or `setup-mac.sh`) —
+  IF AND ONLY IF you are sure this tree corresponds to the running
+  Docker substrate. See "Optional: `--adopt-existing-substrate`" in
+  Prerequisites.
+- Tear down the live substrate's Docker state, then re-run setup
+  for a fresh install: `docker compose down -v --remove-orphans`
+- Switch to the correct tree.
+
+Diagnose the live substrate's identity:
+
+```bash
+docker volume inspect claude-state-architect --format '{{json .Labels}}'
+```
+
+### Setup says my tree describes a substrate with no live Docker state
+
+The `.substrate-id` is present but the `claude-state-architect` volume
+does not exist. Either the volume was removed (e.g. `compose down -v`),
+you are setting up on a different host than the original setup, or you
+restored the tree from backup but not the volumes.
+
+Resolve by ONE of:
+
+- Re-attach this tree to a fresh substrate: `rm .substrate-id` and
+  re-run setup. This generates a new substrate identity.
+- Restore the matching architect volume from backup (with its
+  `app.turtle-core.substrate-id` label intact), then re-run setup.
 
 ### `verify.sh` fails after setup
 
@@ -283,6 +423,7 @@ This destroys all substrate state, including any commits to `main.git`,
 ```bash
 docker compose down -v --remove-orphans
 docker network rm agent-net 2>/dev/null || true
+rm -f .substrate-id
 # Re-run setup:
 ./setup-linux.sh
 ```

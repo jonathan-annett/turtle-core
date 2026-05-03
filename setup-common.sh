@@ -40,6 +40,35 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
+# 1.5 Substrate-identity gate. The first state-mutation gate in setup —
+# everything before this is read-only (prereq checks, the ~/.docker
+# ownership preflight); everything below this point may mutate substrate
+# state. The gate handles the five-outcome matrix from
+# methodology/deployment-docker.md §3.5: fresh install (creates the
+# sentinel), ordinary re-setup (proceeds quietly), or any of three
+# inconsistent states (fails loudly with diagnostics + recovery options).
+# Sets SUBSTRATE_ID and SUBSTRATE_ID_FRESH_INSTALL for downstream code
+# (volume creation, generate-keys.sh).
+# ---------------------------------------------------------------------------
+# shellcheck source=infra/scripts/substrate-identity.sh
+. "${repo_root}/infra/scripts/substrate-identity.sh"
+
+if [ "${TURTLE_CORE_DO_ADOPT:-0}" = "1" ]; then
+    log "Adopting existing substrate (--adopt-existing-substrate)..."
+    substrate_id_adopt
+    log "Adoption succeeded — falling through to ordinary setup. The"
+    log "subsequent gate will see matching state and proceed; the rest"
+    log "of setup will restart the architect via 'compose up -d'."
+fi
+
+log "Checking substrate identity..."
+substrate_id_gate
+
+# Mark generate-keys.sh's invocation context as setup-mediated so it does
+# not have to re-run the full identity check itself.
+export TURTLE_CORE_SETUP_AUTHORIZED=1
+
+# ---------------------------------------------------------------------------
 # 2. Create directories that should exist.
 # ---------------------------------------------------------------------------
 log "Ensuring directory layout..."
@@ -73,9 +102,20 @@ else
 fi
 
 log "Ensuring shared docker volumes exist..."
+# claude-state-architect is the durable carrier of the substrate identity
+# (see deployment-docker.md §3.5). Label it at create time — Docker local
+# volumes do not support label updates after creation. claude-state-shared
+# is regenerated each verify, so it carries no identity label.
 for vol in claude-state-architect claude-state-shared; do
     if ! docker volume inspect "${vol}" >/dev/null 2>&1; then
-        docker volume create "${vol}" >/dev/null
+        if [ "${vol}" = "claude-state-architect" ]; then
+            : "${SUBSTRATE_ID:?SUBSTRATE_ID not set — substrate-id gate did not run}"
+            docker volume create \
+                --label "app.turtle-core.substrate-id=${SUBSTRATE_ID}" \
+                "${vol}" >/dev/null
+        else
+            docker volume create "${vol}" >/dev/null
+        fi
         log "Created docker volume '${vol}'."
     fi
 done
