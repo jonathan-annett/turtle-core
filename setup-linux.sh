@@ -8,6 +8,75 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${repo_root}"
 
 # ---------------------------------------------------------------------------
+# Argument parsing. Recognised flags:
+#   --install-docker    Run install-docker.sh and exit.
+# ---------------------------------------------------------------------------
+do_install_docker=0
+for arg in "$@"; do
+    case "$arg" in
+        --install-docker) do_install_docker=1 ;;
+        -h|--help)
+            cat <<'EOF'
+Usage: ./setup-linux.sh [--install-docker]
+
+  --install-docker   Run install-docker.sh and exit. Use this once on a
+                     fresh host to provision Docker Engine + Compose +
+                     Buildx, then re-run ./setup-linux.sh (with no
+                     arguments) to do the actual substrate setup. The
+                     two-shot pattern is required because the docker-group
+                     membership the installer adds takes effect only in a
+                     new login shell.
+
+  Without --install-docker, setup verifies your prerequisites and brings
+  up the substrate. It does not install or remove anything system-wide.
+EOF
+            exit 0 ;;
+        *)
+            echo "setup-linux.sh: unknown argument: $arg" >&2
+            echo "Try: ./setup-linux.sh --help" >&2
+            exit 2 ;;
+    esac
+done
+
+# --install-docker is a bootstrap-only mode: provision Docker and exit.
+# It deliberately does not continue into the verify/setup path because:
+#   1. On Linux, install-docker.sh's group-membership change requires
+#      a new login shell before non-sudo docker works.
+#   2. The substrate-setup steps (key generation, image build, volume
+#      provisioning) are disjoint from system-package installation and
+#      should not run as a side effect of bootstrapping the host.
+if [ "${do_install_docker}" -eq 1 ]; then
+    if [ ! -x "${repo_root}/install-docker.sh" ]; then
+        echo "setup-linux.sh: install-docker.sh not found or not executable at ${repo_root}/install-docker.sh" >&2
+        exit 1
+    fi
+    exec "${repo_root}/install-docker.sh"
+fi
+
+# ---------------------------------------------------------------------------
+# ~/.docker ownership preflight. A prior 'sudo docker' (or any other
+# root-context docker invocation) leaves ~/.docker owned by root, which
+# breaks subsequent non-sudo docker calls in cryptic ways. Fail fast with
+# the exact remediation command rather than auto-fixing — the directory
+# may legitimately be shared, and surfacing the user-facing decision is
+# safer than silently chowning.
+# ---------------------------------------------------------------------------
+if [ -d "$HOME/.docker" ] && [ "$(stat -c %U "$HOME/.docker")" != "$USER" ]; then
+    cat >&2 <<EOF
+[setup] FATAL: ~/.docker is owned by '$(stat -c %U "$HOME/.docker")', not '$USER'.
+        This is almost always caused by a prior 'sudo docker' invocation
+        creating the directory as root. Subsequent non-sudo docker calls
+        will fail in cryptic ways.
+
+        Fix it:
+            sudo chown -R "\$USER:\$USER" ~/.docker
+
+        Then re-run this script.
+EOF
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # Crostini detection — ChromeOS Linux (Crostini) presents as Debian inside
 # the Termina VM. From Docker's perspective it is just Linux, so we proceed
 # with the Linux path, but advise the user about the resource quirks.
@@ -56,10 +125,17 @@ fi
 # ---------------------------------------------------------------------------
 if ! command -v docker >/dev/null 2>&1; then
     cat >&2 <<'EOF'
-docker is not installed. On Debian/Ubuntu/Crostini:
-    curl -fsSL https://get.docker.com | sh
-    sudo usermod -aG docker "$USER"
-    newgrp docker
+docker is not installed.
+
+  Quick path: re-run with --install-docker to install Docker Engine,
+  Compose, and Buildx automatically (Debian / Ubuntu / Crostini):
+
+      ./setup-linux.sh --install-docker
+
+  Manual path:
+      curl -fsSL https://get.docker.com | sh
+      sudo usermod -aG docker "$USER"
+      newgrp docker
 EOF
     exit 1
 fi
