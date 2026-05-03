@@ -75,11 +75,25 @@ for vol in claude-state-architect claude-state-shared; do
 done
 
 # 6. Refresh shared creds (architect → ephemerals). Idempotent.
+# Always normalise the shared volume's mount-root ownership and mode
+# regardless of whether there are creds to copy. Docker creates the
+# mount point of an empty named volume as root:root 0755 in the first
+# container that mounts it (here, this helper) and persists that
+# ownership on the volume; ephemerals later mount agent-owned at
+# /home/agent/.claude but cannot override what's already on the
+# volume. Without the chown/chmod below, claude-code in the planner
+# (running as agent) cannot write back rotated OAuth tokens, create
+# .credentials.json.tmp during atomic replace, or scaffold cache/
+# and backups/ subdirs. The chown is also retroactive: re-running
+# verify.sh on a substrate that pre-dates this fix repairs the
+# mount root in place — no teardown required.
 if docker run --rm \
     -v claude-state-architect:/src:ro \
     -v claude-state-shared:/dst \
     debian:bookworm-slim \
     sh -c '
+        chown 1000:1000 /dst
+        chmod 0700 /dst
         if [ -f /src/.credentials.json ]; then
             cp /src/.credentials.json /dst/.credentials.json
             chmod 600 /dst/.credentials.json
