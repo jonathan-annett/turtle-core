@@ -151,11 +151,12 @@ Files NOT touched (per brief constraints):
   does so today (grep confirms), but downstream forks may. Behavior is
   not silently permissive — any commission whose brief lacks the field
   fails loudly, regardless of body contents.
-- **`SETUP-BRIEF.report.md` §3 item 3** (lines 270–276) calls out that
-  the daemon previously took `allowed_tools` from the POST body and
-  notes this gap; that note is now obsolete. s003 retroactively files
-  the report under `briefs/s000-setup/`; a follow-up note there could
-  link to this section's fix, but the brief does not require it.
+- **`briefs/s000-setup/section.report.md` §3 item 3** (lines 270–276
+  in the original; the report was moved from the repo root in s003)
+  calls out that the daemon previously took `allowed_tools` from the
+  POST body and notes this gap; that note is now obsolete. A follow-up
+  addendum could link to this section's fix, but the brief does not
+  require it.
 - **Parser permissiveness:** the parser accepts a fenced code block
   with no language tag (treated as YAML). This is intentional — the
   spec §7.3 wording does not mandate a tag — but means a coder author
@@ -171,7 +172,7 @@ Files NOT touched (per brief constraints):
   section was committed as part of this section's baseline — 3.a will
   be a straight edit to that pre-existing §9 OAuth-auth bullet.
 - After s003 lands, consider whether the now-obsolete §3 item 3 of
-  `SETUP-BRIEF.report.md` warrants an addendum noting that the gap was
+  `briefs/s000-setup/section.report.md` warrants an addendum noting that the gap was
   closed in s001. Out of scope for s001/s003 as written.
 
 ## Pointers to task reports
