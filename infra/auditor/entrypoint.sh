@@ -81,4 +81,21 @@ cat <<'EOF'
 EOF
 
 cd /work
+
+# s008 8.e: BOOTSTRAP_PROMPT — when audit.sh is invoked with a section
+# slug it sets this env var. Run claude non-interactively against the
+# prompt before dropping to a shell. The trailing '|| true' keeps the
+# shell reachable for post-discharge inspection even if claude exits
+# non-zero.
+if [ -n "${BOOTSTRAP_PROMPT:-}" ]; then
+    echo
+    echo "Bootstrap prompt detected; invoking claude non-interactively."
+    echo "When claude discharges, you'll be dropped into a shell."
+    echo
+    claude -p "${BOOTSTRAP_PROMPT}" || true
+    echo
+    echo "Claude discharged. Dropping to interactive shell."
+    echo
+fi
+
 exec bash -l
