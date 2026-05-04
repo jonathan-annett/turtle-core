@@ -17,10 +17,14 @@
 
 check_brief_exists() {
     local brief_path="$1"
+    # ARCHITECT_CONTAINER override exists so the substrate-end-to-end test
+    # (s008 8.f) can point this helper at its scratch architect container.
+    # Production callers leave it unset and hit the canonical name.
+    local arch="${ARCHITECT_CONTAINER:-agent-architect}"
 
-    if ! docker inspect -f '{{.State.Running}}' agent-architect 2>/dev/null | grep -q '^true$'; then
+    if ! docker inspect -f '{{.State.Running}}' "${arch}" 2>/dev/null | grep -q '^true$'; then
         cat >&2 <<EOF
-FATAL: agent-architect container is not running.
+FATAL: ${arch} container is not running.
 
 The brief-existence check uses the architect's /work clone as its
 verification surface (deployment-docker.md §6.2). Bring the architect
@@ -31,17 +35,17 @@ EOF
         return 2
     fi
 
-    if ! docker exec agent-architect test -f "/work/${brief_path}"; then
+    if ! docker exec "${arch}" test -f "/work/${brief_path}"; then
         cat >&2 <<EOF
-FATAL: brief not found at ${brief_path} (in agent-architect:/work).
+FATAL: brief not found at ${brief_path} (in ${arch}:/work).
 
 If the architect has just committed the brief, ensure it has been pushed:
-    docker exec agent-architect git -C /work push
+    docker exec ${arch} git -C /work push
 
 Or run an architect fetch if the brief is on main but not in the
 architect's clone:
-    docker exec agent-architect git -C /work fetch && \\
-        docker exec agent-architect git -C /work pull
+    docker exec ${arch} git -C /work fetch && \\
+        docker exec ${arch} git -C /work pull
 EOF
         return 1
     fi
