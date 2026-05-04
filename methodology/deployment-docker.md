@@ -463,18 +463,23 @@ Architect produces a section brief, commits it to `main` at `briefs/s003-feature
 ./commission-pair.sh s003-feature
 ```
 
-The script:
+The script (commissioning mode — slug supplied):
+- Verifies the section brief exists at `briefs/s003-feature/section.brief.md` on main, by querying the architect's `/work` clone via `docker exec agent-architect test -f`. Fails fast with a recovery hint if missing (committed but not pushed; on main but architect clone stale).
 - Generates port and token.
 - Writes `.pairs/.pair-s003-feature.env` (0600).
 - Brings up `coder-daemon` for this section.
-- Prints a commissioning summary for the human to paste into the planner.
+- Builds a deterministic bootstrap prompt and passes it to the planner container via the `BOOTSTRAP_PROMPT` env var.
 - Brings up `planner` in the foreground.
 
-The human pastes the commissioning summary into the planner's claude-code instance:
+The planner's entrypoint detects `BOOTSTRAP_PROMPT` and invokes
+`claude -p "$BOOTSTRAP_PROMPT"` non-interactively before dropping to
+a shell. The canonical prompt for s003-feature is:
 
-> "Read /work/main/briefs/s003-feature/section.brief.md. The coder daemon is at http://coder-daemon:$port with token $token (already in env). Discharge when done."
+> Read /work/briefs/s003-feature/section.brief.md and execute the section per the methodology in /methodology/planner-guide.md (which is symlinked as /work/CLAUDE.md). The coder daemon is at http://coder-daemon:$port. Your bearer token is in $COMMISSION_TOKEN. Discharge when the section is done.
 
-The planner decomposes the section, commits task briefs, posts each commission to the daemon, polls for completion, merges PRs, writes the section report, exits. Script tears everything down.
+The planner decomposes the section, commits task briefs, posts each commission to the daemon, polls for completion, merges PRs, writes the section report, discharges. The container drops to a shell so the human can inspect post-discharge state; on shell exit the script tears everything down.
+
+**Manual mode (no slug).** Running `./commission-pair.sh` without an argument skips the brief check and any bootstrap prompt; the planner drops straight to a shell so you can run `claude` interactively, debug, or inspect the container. Useful during substrate iteration.
 
 ### 6.3 Audit commission
 
@@ -484,7 +489,18 @@ Architect produces an audit brief, commits it to `main` at `briefs/s003-feature/
 ./audit.sh s003-feature
 ```
 
-Auditor reads the audit brief, produces the audit report into the auditor repo, exits. The architect (still running in its container) detects the new audit report on its next `git fetch` of the auditor clone, and copies it to `briefs/s003-feature/audit.report.md` on `main`.
+The script (commissioning mode — slug supplied):
+- Verifies the audit brief exists at `briefs/s003-feature/audit.brief.md` on main, by the same `docker exec agent-architect test -f` mechanism used by `commission-pair.sh`.
+- Builds a deterministic bootstrap prompt and passes it to the auditor container via `BOOTSTRAP_PROMPT`.
+- Brings up `auditor` in the foreground.
+
+The canonical prompt for s003-feature is:
+
+> Read /work/briefs/s003-feature/audit.brief.md and execute the audit per /methodology/auditor-guide.md (symlinked as /work/CLAUDE.md). Your private workspace is /auditor (writable). The main repo at /work is read-only. Write the audit report to the auditor repo at the path named in the brief, commit and push, then discharge.
+
+Auditor reads the audit brief, produces the audit report into the auditor repo, discharges. The architect (still running in its container) detects the new audit report on its next `git fetch` of the auditor clone, and copies it to `briefs/s003-feature/audit.report.md` on `main`.
+
+**Manual mode (no slug).** Running `./audit.sh` without an argument skips the brief check and any bootstrap prompt; the auditor drops straight to a shell.
 
 ### 6.4 Inspecting commission history
 

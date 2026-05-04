@@ -594,6 +594,127 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Phase 7 — s008 8.f: commission-pair.sh bad-slug fails fast
+# ---------------------------------------------------------------------------
+hr; echo "Phase 7: commission-pair.sh bad-slug failure (s008)"
+
+# Invoke commission-pair.sh directly with a slug whose brief doesn't exist.
+# Override ARCHITECT_CONTAINER so check-brief.sh queries the test's scratch
+# architect (the host's agent-architect may not be running). The script
+# should exit non-zero before any docker-compose interaction.
+bad_slug="s999-does-not-exist-${test_pid}"
+bad_brief_path="briefs/${bad_slug}/section.brief.md"
+bad_out=$(ARCHITECT_CONTAINER="${project}-architect" \
+    bash "${repo_root}/commission-pair.sh" "${bad_slug}" 2>&1)
+bad_rc=$?
+
+if [ "${bad_rc}" -ne 0 ]; then
+    pass "commission-pair.sh bad-slug exited non-zero (rc=${bad_rc})"
+else
+    fail "commission-pair.sh bad-slug exited 0 (expected non-zero)"
+fi
+
+if printf '%s' "${bad_out}" | grep -qF "${bad_brief_path}"; then
+    pass "bad-slug error message names the missing brief path"
+else
+    fail "bad-slug error message did not mention '${bad_brief_path}' (got: ${bad_out})"
+fi
+
+# Confirm no scratch project leaked from the failed run. The script's
+# project name template is "${repo_root_basename}-${section}".
+leaked_project="$(basename "${repo_root}")-${bad_slug}"
+if [ -z "$(docker compose -p "${leaked_project}" ps -q 2>/dev/null)" ]; then
+    pass "no compose containers leaked under '${leaked_project}'"
+else
+    fail "compose containers leaked under '${leaked_project}' — bad-slug should exit before bringing anything up"
+    docker compose -p "${leaked_project}" --profile ephemeral down -v --remove-orphans >/dev/null 2>&1 || true
+fi
+
+# ---------------------------------------------------------------------------
+# Phase 8 — s008 8.f: planner entrypoint passes BOOTSTRAP_PROMPT to claude
+# ---------------------------------------------------------------------------
+hr; echo "Phase 8: planner BOOTSTRAP_PROMPT passthrough (s008)"
+
+# Stub claude that records its arguments into the shared volume and exits.
+# Mounted at /usr/local/bin/claude so it shadows the real binary in
+# /usr/bin. The entrypoint will invoke it as 'claude -p "<prompt>"', so
+# $1='-p' and $2 is the bootstrap prompt itself.
+mkdir -p "${stub_dir}"
+cat > "${stub_dir}/planner-claude" <<'STUB_EOF'
+#!/bin/bash
+# Stub claude for s008 bootstrap-passthrough test.
+marker=/home/agent/.claude/bootstrap-stub-marker
+{
+    echo "stub-claude-invoked"
+    echo "argc=$#"
+    echo "arg1=${1:-}"
+    echo "arg2=${2:-}"
+} > "${marker}"
+exit 0
+STUB_EOF
+chmod 0755 "${stub_dir}/planner-claude"
+
+# Pre-clear any stale marker from a previous run (paranoia; the volume is
+# fresh per test invocation, but the helper container makes this cheap).
+docker run --rm -v "${vol_shared}:/v" debian:bookworm-slim \
+    rm -f /v/bootstrap-stub-marker >/dev/null 2>&1 || true
+
+bootstrap_sentinel="bootstrap-passthrough-${test_pid}"
+
+# 'compose run --rm -T' allocates no TTY and inherits the test's stdin
+# (which we redirect from /dev/null). After the stub exits, the entrypoint
+# reaches 'exec bash -l'; bash sees EOF on stdin and exits 0, so the
+# container exits cleanly without hanging on a tty.
+ce run --rm -T \
+    -e BOOTSTRAP_PROMPT="${bootstrap_sentinel}" \
+    -v "${stub_dir}/planner-claude:/usr/local/bin/claude:ro" \
+    planner </dev/null >"${work_dir}/planner-bootstrap.out" 2>&1
+planner_rc=$?
+
+if [ "${planner_rc}" -eq 0 ]; then
+    pass "planner ran with BOOTSTRAP_PROMPT and exited 0"
+else
+    fail "planner exited ${planner_rc} with BOOTSTRAP_PROMPT (expected 0)"
+fi
+
+# Always show the captured output (helps diagnose env / mount issues).
+note "planner-bootstrap.out tail:"
+tail -30 "${work_dir}/planner-bootstrap.out" 2>/dev/null | sed 's/^/  /' || true
+
+if grep -qF "Bootstrap prompt detected" "${work_dir}/planner-bootstrap.out"; then
+    pass "entrypoint logged 'Bootstrap prompt detected' banner"
+else
+    fail "entrypoint did not log the bootstrap-detected banner"
+fi
+
+if grep -qF "Claude discharged. Dropping to interactive shell." "${work_dir}/planner-bootstrap.out"; then
+    pass "entrypoint logged the post-discharge banner (reached bash -l)"
+else
+    fail "entrypoint did not log the post-discharge banner"
+fi
+
+marker_content=$(docker run --rm -v "${vol_shared}:/v:ro" debian:bookworm-slim \
+    cat /v/bootstrap-stub-marker 2>/dev/null || true)
+
+if printf '%s' "${marker_content}" | grep -qx 'stub-claude-invoked'; then
+    pass "stub claude was invoked by the entrypoint"
+else
+    fail "stub claude was NOT invoked (marker missing or unexpected: '${marker_content}')"
+fi
+
+if printf '%s' "${marker_content}" | grep -qx 'arg1=-p'; then
+    pass "stub claude received '-p' as first argument"
+else
+    fail "stub claude did not receive '-p' (got: ${marker_content})"
+fi
+
+if printf '%s' "${marker_content}" | grep -qxF "arg2=${bootstrap_sentinel}"; then
+    pass "stub claude received the BOOTSTRAP_PROMPT sentinel as second argument"
+else
+    fail "stub claude did not receive the bootstrap sentinel (got: ${marker_content})"
+fi
+
+# ---------------------------------------------------------------------------
 hr
 printf "Summary: ${GREEN}%d passed${NC}, " "${pass_count}"
 if [ "${fail_count}" -gt 0 ]; then

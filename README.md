@@ -304,16 +304,29 @@ which performs proper diagnosis, instead of calling it directly.
 
 The script:
 
-1. Generates a random TCP port (10000–65535) and a random 43-char bearer
+1. Verifies the section brief exists at
+   `briefs/s001-hello-timestamps/section.brief.md` on main, by querying
+   the architect's `/work` clone (`docker exec agent-architect test -f`).
+   Fails fast with a recovery hint if missing.
+2. Generates a random TCP port (10000–65535) and a random 43-char bearer
    token (`openssl rand -base64 48 | tr -d '\n=+/' | cut -c1-43`).
-2. Writes `.pairs/.pair-s001-hello-timestamps.env` (mode 0600).
-3. Brings up `coder-daemon` for this section in its own compose project
+3. Writes `.pairs/.pair-s001-hello-timestamps.env` (mode 0600).
+4. Brings up `coder-daemon` for this section in its own compose project
    namespace (so multiple pairs can run in parallel).
-4. Prints a commissioning summary block for you to paste into the planner.
-5. Runs the planner in the foreground.
+5. Builds a deterministic bootstrap prompt and passes it to the planner
+   container via the `BOOTSTRAP_PROMPT` env var. The planner entrypoint
+   detects this and invokes `claude -p "$BOOTSTRAP_PROMPT"` non-
+   interactively before dropping to a shell — so the planner self-
+   bootstraps from the brief filename without any human paste step.
+6. Runs the planner in the foreground.
 
 When the planner exits — discharge or kill — the trap runs `compose down -v`
 to dispose the daemon and the ephemeral env file.
+
+**Manual mode.** Running `./commission-pair.sh` without an argument skips
+the brief check and the bootstrap prompt; the planner drops straight to
+a shell. Useful for inspecting/debugging the container during substrate
+iteration.
 
 The daemon's HTTP API (`POST /commission`, `GET /commission/{id}`,
 `GET /commission/{id}/wait`, `POST /commission/{id}/cancel`,
@@ -328,8 +341,12 @@ The daemon's HTTP API (`POST /commission`, `GET /commission/{id}`,
 ```
 
 The auditor reads `briefs/s001-hello-timestamps/audit.brief.md` and writes
-its report to `auditor.git`. After it exits, follow the on-screen prompt
-to have the architect ferry the report into `main`.
+its report to `auditor.git`. Same dual-mode behaviour as
+`commission-pair.sh`: with a slug, the script verifies the audit brief
+exists and bootstraps the auditor non-interactively via
+`BOOTSTRAP_PROMPT`; without a slug, it drops to a shell. After the
+auditor exits, follow the on-screen prompt to have the architect ferry
+the report into `main`.
 
 ---
 
