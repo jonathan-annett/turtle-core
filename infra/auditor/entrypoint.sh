@@ -87,12 +87,80 @@ cd /work
 # prompt before dropping to a shell. The trailing '|| true' keeps the
 # shell reachable for post-discharge inspection even if claude exits
 # non-zero.
+#
+# s011 11.f: when bootstrap-mode is active, also parse the audit brief's
+# "Required tool surface" field (spec §7.6) via the shared parser at
+# /usr/local/lib/turtle-core/parse-tool-surface.sh (bash port of
+# infra/coder-daemon/parse-tool-surface.js). Pass the result as
+# --allowed-tools to claude. Same shape and failure semantics as the
+# planner side; the auditor reads its brief from /work (read-only main
+# clone) and writes only to /auditor.
 if [ -n "${BOOTSTRAP_PROMPT:-}" ]; then
     echo
     echo "Bootstrap prompt detected; invoking claude non-interactively."
     echo "When claude discharges, you'll be dropped into a shell."
     echo
-    claude -p "${BOOTSTRAP_PROMPT}" || true
+
+    parser=/usr/local/lib/turtle-core/parse-tool-surface.sh
+    if [ ! -x "${parser}" ]; then
+        cat >&2 <<EOF
+FATAL: tool-surface parser not found at ${parser}.
+
+Expected the parser to be bind-mounted from the host at:
+    ./infra/scripts/lib/parse-tool-surface.sh
+
+If you have just pulled an update that introduces this file, re-run
+verify.sh on the host (or restart the substrate) so the volume mount
+takes effect.
+EOF
+        exec bash -l
+    fi
+
+    brief_path="${BRIEF_PATH:-}"
+    if [ -z "${brief_path}" ]; then
+        # Defensive: extract the brief path from the prompt itself.
+        brief_path=$(printf '%s' "${BOOTSTRAP_PROMPT}" | sed -n 's|.*Read /work/\([^ ][^ ]*\).*|/work/\1|p' | head -n1)
+    fi
+
+    if [ -z "${brief_path}" ] || [ ! -f "${brief_path}" ]; then
+        cat >&2 <<EOF
+FATAL: auditor bootstrap was given no usable BRIEF_PATH.
+
+BRIEF_PATH=${BRIEF_PATH:-<unset>}
+Heuristic-extracted: ${brief_path:-<empty>}
+
+The auditor entrypoint needs the audit brief's filesystem path
+inside the container to parse the 'Required tool surface' field.
+audit.sh should set BRIEF_PATH=/work/briefs/<slug>/audit.brief.md.
+EOF
+        exec bash -l
+    fi
+
+    echo "Parsing tool surface from ${brief_path}..."
+    if ! allowed_tools=$("${parser}" "${brief_path}"); then
+        cat >&2 <<EOF
+
+FATAL: auditor cannot start — audit brief is missing a usable
+'Required tool surface' field. See the error above; the architect
+must author the field per methodology/agent-orchestration-spec.md
+§7.6. Until that is fixed, every verification command the auditor
+needs would be silently denied by claude.
+
+Dropping to shell so you can inspect ${brief_path} and post-mortem.
+EOF
+        exec bash -l
+    fi
+    echo "Allowed tools: ${allowed_tools}"
+    echo
+
+    # --permission-mode dontAsk + --allowed-tools mirrors the coder-daemon's
+    # invocation pattern (deployment-doc §4.5 #Coder): out-of-allowlist
+    # actions deny rather than prompt. Non-interactive bootstrap has no
+    # human in the loop to unblock a permission dialogue.
+    claude -p "${BOOTSTRAP_PROMPT}" \
+        --permission-mode dontAsk \
+        --allowed-tools "${allowed_tools}" \
+        || true
     echo
     echo "Claude discharged. Dropping to interactive shell."
     echo

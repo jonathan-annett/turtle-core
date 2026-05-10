@@ -166,6 +166,9 @@ services:
       - ./.substrate-state/known-hosts:/home/agent/.ssh-known-hosts:ro
       - ./.substrate-state/ssh-config:/home/agent/.ssh/config:ro
       - ./infra/scripts/agent-ssh-audited.sh:/usr/local/bin/ssh:ro
+      # s011 11.f: shared "Required tool surface" parser; see the planner
+      # service's identical comment for the rationale.
+      - ./infra/scripts/lib/parse-tool-surface.sh:/usr/local/lib/turtle-core/parse-tool-surface.sh:ro
     networks:
       - agent-net
     stdin_open: true
