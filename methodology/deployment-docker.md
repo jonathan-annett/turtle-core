@@ -603,7 +603,208 @@ For projects with specific build tools, the project-template repo gets forked an
 
 ---
 
-## 10. What this document does not cover
+## 10. Platforms
+
+The substrate's role images are language-and-toolchain neutral by
+default. To target a specific build/test stack — Go, Rust, C/C++,
+Python tooling, Node-extras, embedded firmware — the human selects
+one or more **platforms** at substrate setup time. The selected
+platforms compose with the static role templates to produce
+`Dockerfile.generated` for `coder-daemon` and `auditor`; the resulting
+images carry the platform's apt packages, language installers, env
+vars, and verify commands.
+
+The platform plugin model also covers **runtime device passthrough**.
+Embedded targets (the canonical case is ESP32 via PlatformIO) test
+their firmware by flashing it to a board over USB and reading test
+results back over UART; without serial access, the auditor can only
+do static analysis and the coder can't TDD the way embedded coders
+actually work. Platforms can declare device requirements
+(`runtime.device_required`, `runtime.device_hint`,
+`runtime.groups`); the operator wires devices in via `--device`.
+
+The full schema reference (build-time toolchain block + runtime
+device block + architect/planner defaults) and the per-platform
+catalog live in **`methodology/platforms/README.md`**. This section
+covers the substrate-level mechanics and operator workflow.
+
+### 10.1 Selecting a platform at setup
+
+```bash
+# Linux:
+./setup-linux.sh --platform=go
+./setup-linux.sh --platform=go,python-extras
+./setup-linux.sh --platform=platformio-esp32 --device=/dev/ttyUSB0
+
+# macOS:
+./setup-mac.sh --platform=rust
+```
+
+Repeated `--platform` flags concatenate
+(`--platform=go --platform=python-extras` is equivalent to
+`--platform=go,python-extras`). Empty / absent → `default` (no
+toolchain layers added; substrate behaves as it did before s009).
+
+`--device=<host-path>` may be repeated similarly; each path must
+exist on the host at parse time. Platforms that declare
+`runtime.device_required: true` (currently `platformio-esp32`) emit
+a setup-time warning if no `--device` is supplied — this is a
+warning, not a failure, because a "compile-only" workflow is
+legitimate (operator may add the bridge later).
+
+### 10.2 The ship-with platform catalog
+
+| Platform              | Use case                                  | Approx size add |
+| --------------------- | ----------------------------------------- | --------------- |
+| `default`             | Baseline; current behaviour               | 0               |
+| `go`                  | Go projects                               | ~150MB          |
+| `rust`                | Rust projects                             | ~400MB          |
+| `python-extras`       | Python with uv / poetry / pytest          | ~100MB          |
+| `node-extras`         | Node with pnpm / yarn / typescript        | ~50MB           |
+| `c-cpp`               | C / C++ with cmake / valgrind / gdb       | ~300MB          |
+| `platformio-esp32`    | Embedded ESP32 via PlatformIO; HIL serial | ~500MB          |
+
+New platforms are added by writing
+`methodology/platforms/<name>.yaml` per the schema in that
+directory's README. The validator
+(`infra/scripts/lib/validate-platform.sh`) runs at every setup
+invocation and aborts setup on schema failure with a clear
+diagnostic identifying the file and the failing field.
+
+### 10.3 The setup pipeline
+
+When `--platform` (or `--add-platform`) is present, setup-common.sh
+extends the canonical setup with these additional steps:
+
+1. **Validate** each named platform YAML.
+2. **Render** `infra/coder-daemon/Dockerfile.generated` and
+   `infra/auditor/Dockerfile.generated` from the static template plus
+   the selected platform layers (apt → install → env → verify).
+   Generated files are gitignored.
+3. **Render device override.** If `--device` was supplied,
+   `docker-compose.override.yml` is written at the repo root with a
+   `devices:` block on coder-daemon and auditor. Compose autoloads
+   this file, so every existing call site
+   (`commission-pair.sh`, `audit.sh`, `verify.sh`, the substrate
+   end-to-end test) gets device wiring transparently — no code
+   change in those scripts.
+4. **Build** `agent-base`, then run `docker compose --profile
+   ephemeral build` against the generated Dockerfiles.
+5. **Setup-time verify.** For each non-default platform, each role
+   image runs the platform's `verify` command list inside a one-shot
+   container (`docker run --rm --entrypoint bash <image> -c <cmd>`).
+   Failure aborts setup with a per-platform/role/command diagnostic.
+6. **Write substrate state.** `.substrate-state/platforms.txt` and
+   `.substrate-state/devices.txt` are populated at the repo root.
+   The architect compose service mounts the directory read-only at
+   `/substrate`. `SUBSTRATE_PLATFORMS` and `SUBSTRATE_DEVICES` are
+   also exported to the architect's container env.
+7. **Re-emit the device-required warning** at the very end of setup
+   so it's the last thing the human sees (easy to miss in
+   scrollback otherwise).
+
+The architect-guide directs the architect to read
+`/substrate/platforms.txt` and `/substrate/devices.txt` when
+initializing or updating `SHARED-STATE.md`, recording each platform
+under "Target platform(s)" and each device under
+"Hardware-in-the-loop devices". This is the substrate's contract
+with the project methodology: the architect captures the chosen
+platform configuration as a project-wide decision so future agents
+(planner, coder, auditor) and future architect sessions inherit it.
+
+### 10.4 Extending a running substrate: `--add-platform`, `--add-device`
+
+```bash
+./setup-linux.sh --add-platform=rust
+./setup-linux.sh --add-device=/dev/ttyUSB0
+./setup-linux.sh --add-platform=platformio-esp32 --add-device=/dev/ttyUSB0
+```
+
+`--add-platform=<name>` re-renders `Dockerfile.generated` with
+`<existing>,<new>`, rebuilds coder-daemon + auditor (architect /
+git-server are unaffected), runs setup-time verify for the new
+platform only, and updates `.substrate-state/platforms.txt`. By
+default it **refuses** if either:
+
+- An ephemeral container is running (planner / coder-daemon /
+  auditor) — silently changing the toolchain underneath an in-flight
+  pair would invalidate its assumptions.
+- A `section/*` branch on origin has commits ahead of main —
+  conservative heuristic: if any section has unmerged work, it might
+  depend on the current toolchain.
+
+Pass `--force` to skip both pre-flights. The operator owns the
+consequences. The brief intentionally chose the more conservative
+of the two readings ("just check running containers" vs. "also
+check pending sections") — see the s009 brief design call 4.
+
+`--add-device=<host-path>` updates
+`.substrate-state/devices.txt`, re-renders
+`docker-compose.override.yml`, and skips the image rebuild (devices
+are runtime, not build-time). It refuses only on running containers
+(adding a device cannot invalidate an in-progress section's
+assumptions).
+
+`--add-platform` and `--add-device` may be combined in one
+invocation; `--add-platform` runs first (rebuild), `--add-device`
+second (no rebuild). Combining either with the initial-setup
+`--platform` / `--device` flags is rejected with a clear message —
+the two modes are conceptually distinct.
+
+### 10.5 Hardware-in-the-loop testing
+
+For embedded targets, the dominant test pattern is:
+
+1. Compile test firmware on the host (via the platform's toolchain
+   inside coder-daemon / auditor).
+2. Flash the firmware to the device over USB.
+3. The device runs the test code and reports pass/fail back over
+   UART.
+4. The host (test runner inside the role container) reads the serial
+   output and decides pass/fail.
+
+PlatformIO's `pio test` defaults to exactly this. esptool flashes
+ESP32 over the device's USB-to-serial bridge (`/dev/ttyUSB0` or
+`/dev/ttyACM0` on Linux). To make this work end-to-end, the role
+container needs:
+
+- The PlatformIO toolchain installed (handled by the
+  `platformio-esp32` platform's image layers).
+- Read/write access to the host serial device (handled by passing
+  `--device=/dev/ttyUSB0` at setup, which renders a `devices:` entry
+  in `docker-compose.override.yml`).
+- The agent user in the `dialout` group (handled by
+  `runtime.groups: [dialout]` in the platform YAML, which the
+  renderer translates into a `usermod -a -G dialout agent` line at
+  image build time).
+
+`pio test -e native` (host-side native tests, no flash) still works
+for pure-logic code regardless of device wiring, but timing,
+peripheral interaction, and actual device behaviour can only be
+validated with HIL.
+
+### 10.6 Forward reference: remote serial bridge
+
+The substrate runs Docker on a single host. Most VPS-style hosts
+don't have an ESP32 plugged into them. The **planned next section
+after s009** is a remote serial bridge: a small daemon running on a
+Raspberry Pi (or Chromebook, or any host with the device physically
+connected) that tunnels its serial port to the VPS where Docker
+runs, presenting a virtual `/dev/tty*` on the Docker host that
+behaves like a local USB serial device.
+
+s009's `--device=<host-path>` mechanism is built in anticipation of
+consuming this virtual path transparently. From the substrate's
+point of view, what's behind a host device path — real USB, virtual
+PTY pointing at a tunnelled remote port — is opaque. The platform
+contract is "supply a host device path"; the bridge tooling is the
+only thing that needs to know it's a tunnel. So the platform model
+shipped in s009 is forward-compatible with the bridge without
+schema changes.
+
+---
+
+## 11. What this document does not cover
 
 - **The actual project's source build/test setup.** Goes in the coder-daemon image. Project-specific.
 - **CI integration.** Standard CI on PRs to section branches, outside the methodology.
