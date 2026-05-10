@@ -804,7 +804,208 @@ schema changes.
 
 ---
 
-## 11. What this document does not cover
+## 11. Remote hosts
+
+> ⚠ **Read this first — trust posture is explicit.** Registering a remote
+> host gives the agent unrestricted SSH access to that host with whatever
+> privileges the registered user account holds (typically passwordless
+> sudo, per the setup precondition). The substrate does not sandbox the
+> remote — it is, deliberately, a *physical sandbox* the operator hands
+> to the agent. If you don't want the agent to have full shell on a
+> machine, do not register that machine. Operators wanting a tighter
+> posture (command filtering, limited-shell users, etc.) configure that
+> on the target before registration.
+
+Many useful workflows need access to a separate machine: a Raspberry Pi
+holding an embedded board for hardware-in-the-loop work, an ARM single-
+board-computer for cross-arch builds, a sensor / GPIO station, or a
+spare host for "the test needs a second box" scenarios. s010 ships a
+remote-host registration mechanism that gives role containers
+(architect, coder-daemon, auditor) named, key-based SSH access to one
+or more such machines — `ssh tdongle-pi 'esptool ...'` from inside any
+role container, without further setup.
+
+The trade-off versus s009's `--device=` (local USB passthrough) is
+honest: instead of bridging a serial port up to the Docker host and
+pretending a remote board is local, the agent SSH's to the device-host
+and runs `esptool` / `pio` / `cat /dev/ttyACM0` *there* — where USB is
+local and "just works" the way it always does. No ser2net, no socat-PTY,
+no kernel-level plumbing. Each piece is a known single-purpose tool;
+failure modes are crisp.
+
+### 11.1 Registration spec
+
+```
+--remote-host=<name>=<user>@<host>[:<port>][,<spec2>,...]
+```
+
+- `<name>`: lowercase, starts with a letter, `[a-z0-9_-]` only, max
+  63 chars. Used as the SSH config alias and as the directory name for
+  the per-host key. Must be unique within one substrate.
+- `<user>`: any POSIX username. The substrate doesn't pre-resolve.
+- `<host>`: hostname or IP.
+- `<port>`: optional, integer 1..65535, defaults to 22.
+
+Multiple specs can be supplied either by repeating the flag or as a
+comma-separated list. Names must be unique across all specs.
+
+### 11.2 Bootstrap flow
+
+When `--remote-host=<spec>` is supplied at setup time (or
+`--add-remote-host=<spec>` on a running substrate), the substrate:
+
+1. **Idempotency check** — if the per-host key, the known-hosts
+   entry, and substrate-key-only `ssh + sudo -n` all already work,
+   skip steps 2–6.
+2. **Generate keypair** — ed25519 under
+   `infra/keys/remote-hosts/<name>/`, mode 0600. Per-host (not
+   substrate-wide), so revocation is granular.
+3. **Capture host key** — `ssh-keyscan` against the target,
+   appended (deduped) to `.substrate-state/known-hosts`. The
+   `[host]:port` form is used when the port differs from 22.
+4. **Install substrate pubkey on the target** — using *the
+   operator's* existing SSH credentials (loaded ssh-agent or
+   `~/.ssh/id_*`). `BatchMode=yes` — fails fast with a remediation
+   message if passwordless SSH isn't preconfigured. The remote-side
+   `grep -q -F` makes the append idempotent. The operator's
+   credentials are used **once**; the substrate's own per-host key
+   takes over thereafter. SSH agent forwarding is not used.
+5. **Verify substrate-key-only access** — re-test with
+   `-F /dev/null -o IdentitiesOnly=yes` so we know the substrate's
+   key alone is sufficient; check `sudo -n true` (passwordless sudo
+   is required) and `python3 --version` (a near-universal baseline,
+   needed by esptool and most other agent-relevant tools).
+6. **Append to state file** — the registration lands in
+   `.substrate-state/remote-hosts.txt` as a tab-separated row
+   `<name>\t<user>\t<host>\t<port>`.
+
+The substrate does not pre-install esptool, platformio, picocom, or
+any other agent-relevant tooling. The agent installs whatever a task
+needs at the moment of need (`ssh tdongle-pi 'pip install --user
+esptool'`).
+
+### 11.3 Container wiring
+
+After bootstrap, setup runs `infra/scripts/render-ssh-config.sh` which
+emits a stanza per registered host:
+
+```
+Host tdongle-pi
+    HostName 192.168.16.179
+    User jon
+    Port 22
+    IdentityFile /home/agent/.ssh-remote-hosts/tdongle-pi/id_ed25519
+    IdentitiesOnly yes
+    UserKnownHostsFile /home/agent/.ssh-known-hosts
+    StrictHostKeyChecking yes
+    BatchMode yes
+    ConnectTimeout 10
+```
+
+The canonical file is at `.substrate-state/ssh-config`. Copies are
+mirrored into each role's keys directory (`infra/keys/architect/config`,
+`infra/keys/coder/config`, `infra/keys/auditor/config`); these
+directories are already bind-mounted at `/home/agent/.ssh:ro`, so the
+config naturally appears at `/home/agent/.ssh/config` inside each role
+container. (A direct file mount over the read-only `.ssh` directory
+would fail because Docker rejects layering a mountpoint inside a
+:ro parent — copying into the role's keys directory sidesteps this.)
+
+The other mounts are independent of the role's `.ssh` directory:
+
+- `./infra/keys/remote-hosts:/home/agent/.ssh-remote-hosts:ro` —
+  per-host private keys.
+- `./.substrate-state/known-hosts:/home/agent/.ssh-known-hosts:ro`
+  — cumulative known-hosts file.
+- `./infra/scripts/agent-ssh-audited.sh:/usr/local/bin/ssh:ro` —
+  the audit-logging wrapper (see §11.4).
+
+`/substrate/remote-hosts.txt` is also bind-mounted into coder-daemon
+and auditor (architect already has `/substrate` for s009's
+platforms.txt and devices.txt) so the agent can enumerate registered
+remotes by reading the file.
+
+### 11.4 Audit-logging wrapper
+
+`infra/scripts/agent-ssh-audited.sh` is bind-mounted at
+`/usr/local/bin/ssh:ro` in each role container. Standard PATH ordering
+(`/usr/local/bin:/usr/bin:...`) makes it intercept every `ssh` call —
+interactive shell, login or not, `bash -c` invocation. The wrapper
+logs each command line to:
+
+- stderr (so the agent transcript captures it)
+- `${WORKDIR:-/work}/.substrate-ssh.log` (so per-pair artifacts
+  retain a record outside the transcript)
+
+then `exec`'s `/usr/bin/ssh` with `$@` unchanged. `%q` quoting in the
+log line preserves arguments containing shell metacharacters. The
+wrapper is hygiene, not a guardrail — it logs but doesn't block.
+
+### 11.5 Adding a remote host on a running substrate
+
+```
+./setup-linux.sh --add-remote-host=<name>=<user>@<host>[:<port>]
+```
+
+Refuses by default if any ephemeral role container is running
+(`--force` skips the check). No image rebuild; no compose restart.
+Running containers see the new stanza immediately because the
+ssh-config and per-role config files are live bind-mounts.
+
+### 11.6 Removing a remote host
+
+s010 doesn't ship a `--remove-remote-host`. The manual workaround:
+
+1. Edit `.substrate-state/remote-hosts.txt` to remove the host's
+   row.
+2. Run `infra/scripts/render-ssh-config.sh` to regenerate the
+   ssh-config without the stanza.
+3. Optionally: SSH to the target and remove the substrate's pubkey
+   from `~/.ssh/authorized_keys`. The line is identifiable by its
+   `turtle-core-substrate@<name>` comment.
+4. Optionally: `rm -rf infra/keys/remote-hosts/<name>/` to delete
+   the per-host keypair on the substrate side.
+
+A first-class removal command is on the deferred list.
+
+### 11.7 LAN reachability
+
+Bridge networking (Docker host NAT) is sufficient for LAN reachability
+in typical home/office setups. Setup runs a smoke test
+(`ssh <name> true` from a fresh coder-daemon) for each registered
+host and warns (per the s010 design call: warn, don't fail) if any
+fail. Operators whose Docker daemon network configuration prevents
+LAN reachability through bridge NAT may need to switch to
+`network_mode: host` in a compose override or adjust their Docker
+daemon config; the diagnostic suggests both.
+
+### 11.8 Worked example — embedded HIL with the LilyGo T-Dongle-S3
+
+The canonical use case: an Orange Pi (or any Linux device-host) on
+the LAN with a USB-attached embedded board. The substrate registers
+the Pi as a remote host; the agent installs esptool / platformio on
+the Pi as needed; the agent builds firmware on the Pi (so the Pi's
+ARM toolchain handles cross-builds for free); the agent flashes via
+the Pi's local USB-CDC link; the agent reads the boot banner with
+a one-liner `ssh tdongle-pi 'stty -F /dev/ttyACM0 ... | timeout 10
+cat /dev/ttyACM0'`.
+
+The full procedure is documented at
+`infra/scripts/tests/manual/remote-host-tdongle.md`.
+
+### 11.9 Trust posture, again
+
+Repeating the warning at the top because it matters: **register only
+machines you'd give the agent a shell on**. The substrate does not
+sandbox the remote. `ssh tdongle-pi '<anything>'` is the agent's
+shell. If the operator wants to constrain what the agent can run on
+the target, that's a target-side configuration — set up a limited-
+shell user, install command-filtering wrappers, run inside a
+container on the target, etc. — and out of scope for the substrate.
+
+---
+
+## 12. What this document does not cover
 
 - **The actual project's source build/test setup.** Goes in the coder-daemon image. Project-specific.
 - **CI integration.** Standard CI on PRs to section branches, outside the methodology.
