@@ -161,6 +161,8 @@ cd myproject
 ./setup-linux.sh --platform=python-extras,c-cpp  # polyglot
 ./setup-linux.sh --platform=platformio-esp32 --device=/dev/ttyUSB0
                                                  # embedded; pass an ESP32 board through
+./setup-linux.sh --remote-host=tdongle-pi=jon@192.168.16.179
+                                                 # embedded HIL via a remote SSH host (s010)
 
 # macOS:
 ./setup-mac.sh
@@ -186,6 +188,17 @@ hardware-in-the-loop testing (ESP32 over UART), supply
 containers. See `methodology/deployment-docker.md §10` for the full
 operator workflow including `--add-platform` / `--add-device` on
 running substrates.
+
+`--remote-host=<name>=<user>@<host>[:<port>]` (s010) registers a
+named remote SSH host that role containers can reach as
+`ssh <name> '<command>'`. Useful for embedded HIL via a Pi or
+Chromebook holding the board, cross-arch builds against an ARM
+machine, GPIO/sensor work, or any "test needs a second box"
+scenario. Prerequisite: passwordless SSH+sudo from your shell to
+`<user>@<host>` before registering. Trust posture: registration
+gives the agent unrestricted SSH access with that user's
+privileges — see `methodology/deployment-docker.md §11` for the
+full model and the `--add-remote-host` runtime-extension pathway.
 
 From there you and the architect produce `TOP-LEVEL-PLAN.md`, draft the
 first section brief, commit it, and exit. Then:

@@ -35,8 +35,21 @@
 #        runs see the device.
 #     5. No image rebuild required (devices are runtime, not build-time).
 #
-# Both may be combined in one invocation; --add-platform runs first
-# (image rebuild), then --add-device (no rebuild).
+#   --add-remote-host=<spec>  (s010 10.e):
+#     1. Validate the spec (validate-remote-host.sh).
+#     2. Refuse if <name> is already registered (validator catches
+#        this via the state-file duplicate check).
+#     3. Pre-flight: refuse only on running containers; ssh-config is
+#        a live bind mount so a quiescent moment avoids surprises.
+#        Skip with --force.
+#     4. Run bootstrap-remote-host.sh for the new spec.
+#     5. Re-render .substrate-state/ssh-config (and the per-role
+#        copies); running containers see the change immediately.
+#     6. No image rebuild required.
+#
+# All three may be combined in one invocation; --add-platform runs
+# first (image rebuild), then --add-device (override regen), then
+# --add-remote-host (bootstrap + render).
 
 set -euo pipefail
 
@@ -54,6 +67,8 @@ mkdir -p "${state_dir}"
 . "${repo_root}/infra/scripts/lib/yaml.sh"
 # shellcheck source=infra/scripts/lib/validate-platform.sh
 . "${repo_root}/infra/scripts/lib/validate-platform.sh"
+# shellcheck source=infra/scripts/lib/validate-remote-host.sh
+. "${repo_root}/infra/scripts/lib/validate-remote-host.sh"
 
 # ---------------------------------------------------------------------------
 # Pre-flight check (a): running ephemeral containers. We look for any
@@ -335,6 +350,55 @@ do_add_device() {
 }
 
 # ---------------------------------------------------------------------------
+# --add-remote-host branch (s010 10.e)
+# ---------------------------------------------------------------------------
+do_add_remote_host() {
+    local spec="${SUBSTRATE_ADD_REMOTE_HOST}"
+    log "--add-remote-host=${spec}"
+
+    # Validate. The full validator already checks the in-memory state
+    # file for duplicates; remote_host_args_finalize ran it once at argv
+    # time, but a re-check here protects against the unlikely case where
+    # the file changed between argv parse and dispatch.
+    if ! validate_remote_host_spec "${spec}" >/dev/null; then
+        die "spec '${spec}' failed validation; nothing changed."
+    fi
+
+    # Pre-flight: refuse on any running ephemeral role container. The
+    # ssh-config bind mount is live, so existing containers WOULD pick
+    # up the new stanza — but a long-lived ssh control-master inside a
+    # running container could hold an old config in memory, and a
+    # quiescent state is conservative. --force skips.
+    if [ "${SUBSTRATE_FORCE:-0}" != "1" ]; then
+        local running
+        running=$(running_role_containers)
+        if [ -n "${running}" ]; then
+            echo "[add] FATAL: refuse --add-remote-host — ephemeral containers are running:" >&2
+            printf '  - %s\n' ${running} >&2
+            echo "[add] tear them down first, or pass --force to override." >&2
+            exit 1
+        fi
+    fi
+
+    # Bootstrap (idempotent; runs the six-step flow from 10.c against
+    # this single spec). This generates the per-host key, captures the
+    # host key, installs the substrate pubkey on the target, and
+    # appends to remote-hosts.txt.
+    if ! "${repo_root}/infra/scripts/bootstrap-remote-host.sh" "${spec}"; then
+        die "bootstrap failed for '${spec}' (see message above); state file unchanged."
+    fi
+
+    # Re-render ssh-config so running containers (and any new ones
+    # spawned by commission-pair / audit) see the new stanza.
+    "${repo_root}/infra/scripts/render-ssh-config.sh"
+
+    local name="${spec%%=*}"
+    log "--add-remote-host: ${name} registered. Running containers see the new stanza"
+    log "  via the live bind-mount of .substrate-state/ssh-config and infra/keys/<role>/config."
+    log "  No image rebuild, no compose restart."
+}
+
+# ---------------------------------------------------------------------------
 # Drive
 # ---------------------------------------------------------------------------
 yaml_pull
@@ -345,8 +409,13 @@ fi
 if [ -n "${SUBSTRATE_ADD_DEVICES:-}" ]; then
     do_add_device
 fi
+if [ -n "${SUBSTRATE_ADD_REMOTE_HOST:-}" ]; then
+    do_add_remote_host
+fi
 
-if [ -z "${SUBSTRATE_ADD_PLATFORM:-}" ] && [ -z "${SUBSTRATE_ADD_DEVICES:-}" ]; then
-    echo "add-platform-device.sh: nothing to do (no --add-platform / --add-device supplied)." >&2
+if [ -z "${SUBSTRATE_ADD_PLATFORM:-}" ] \
+   && [ -z "${SUBSTRATE_ADD_DEVICES:-}" ] \
+   && [ -z "${SUBSTRATE_ADD_REMOTE_HOST:-}" ]; then
+    echo "add-platform-device.sh: nothing to do (no --add-* supplied)." >&2
     exit 0
 fi

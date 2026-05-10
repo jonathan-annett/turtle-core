@@ -125,6 +125,8 @@ Treat it as the artifact that makes you rehydratable. If your context degrades a
 
 When initializing or updating `SHARED-STATE.md`, read `/substrate/platforms.txt` and `/substrate/devices.txt`. Each line in `platforms.txt` is the name of a target platform configured at substrate setup; record each as a project-wide decision in `SHARED-STATE.md` under the heading **Target platform** (single) or **Target platforms** (multiple, polyglot mode). Each line in `devices.txt` is a host device path that has been mapped through to the role containers; record these under **Hardware-in-the-loop devices** if any platform's testing depends on them. If `/substrate/platforms.txt` is absent, the substrate is on `default` only (no platform plugin configured). The `SUBSTRATE_PLATFORMS` and `SUBSTRATE_DEVICES` environment variables carry the same information for shell scripts; the files are the canonical record.
 
+A `/substrate/remote-hosts.txt` file, if present, lists named remote hosts available to role containers (s010). Each line is tab-separated `<name>\t<user>\t<host>\t<port>`. Inside any role container, `ssh <name> '<command>'` reaches the remote using substrate-managed credentials. Record relevant remote hosts in `SHARED-STATE.md` under **Remote hosts** if the project's work depends on them — typically: embedded HIL targets (Pi-attached boards), GPIO/sensor stations, or cross-arch test machines. Treat each registered remote-host name as part of the project's invariant surface so planners and coders can address it consistently across briefs.
+
 ## Discipline
 
 - Briefs are your primary system-mutating output. Make them precise.
