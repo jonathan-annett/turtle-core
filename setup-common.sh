@@ -252,6 +252,40 @@ if [ -n "${SUBSTRATE_REMOTE_HOSTS:-}" ]; then
     "${repo_root}/infra/scripts/bootstrap-remote-host.sh"
 fi
 
+# Render ssh-config from whatever remote-hosts.txt holds (empty file is
+# fine — produces a config with just the GENERATED-BY header). The role
+# containers' compose mount requires the source file to exist either way.
+"${repo_root}/infra/scripts/render-ssh-config.sh"
+
+# LAN-reachability smoke test (per brief 10.d / design call 5). Verifies
+# bridge-network NAT lets the role containers reach each registered
+# remote host. Warns rather than fails: an operator may have legitimately
+# registered hosts that are only reachable from a subset of containers,
+# and per design call 5 we surface the diagnostic without blocking.
+substrate_remote_hosts_lan_smoke() {
+    [ ! -s "${state_dir}/remote-hosts.txt" ] && return 0
+    local failing=()
+    while IFS=$'\t' read -r name _user _host _port; do
+        [ -z "${name}" ] && continue
+        if ! docker compose run --rm --no-deps -T coder-daemon \
+                bash -c "ssh -o BatchMode=yes -o ConnectTimeout=5 '${name}' true" \
+                >/dev/null 2>&1; then
+            failing+=("${name}")
+        fi
+    done < "${state_dir}/remote-hosts.txt"
+    if [ "${#failing[@]}" -gt 0 ]; then
+        warn "LAN smoke test: coder-daemon could not reach the following remote host(s):"
+        for n in "${failing[@]}"; do
+            warn "  - ${n}"
+        done
+        warn "If these are LAN IPs, your Docker bridge may not NAT to them."
+        warn "Try one of:"
+        warn "  - check 'docker network inspect bridge' and your Docker daemon config"
+        warn "  - switch role services to 'network_mode: host' in a compose override"
+    fi
+}
+substrate_remote_hosts_lan_smoke
+
 # ---------------------------------------------------------------------------
 # 6. Bring up the long-lived services.
 # ---------------------------------------------------------------------------

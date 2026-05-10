@@ -47,6 +47,10 @@ services:
       # durable record; the env vars are a convenience for shells.
       SUBSTRATE_PLATFORMS:  ${SUBSTRATE_PLATFORMS:-default}
       SUBSTRATE_DEVICES:    ${SUBSTRATE_DEVICES:-}
+      # s010: comma-separated <name>=<user>@<host>[:<port>] specs — empty
+      # if no remote hosts are registered. Convenience for shells; the
+      # /substrate/remote-hosts.txt mount is the durable record.
+      SUBSTRATE_REMOTE_HOSTS: ${SUBSTRATE_REMOTE_HOSTS:-}
     volumes:
       - architect-workspace:/work
       - architect-auditor-clone:/auditor
@@ -59,6 +63,17 @@ services:
       # paragraph in §10 directs the architect to read these when
       # initializing or updating SHARED-STATE.md.
       - ./.substrate-state:/substrate:ro
+      # s010: remote-host integration. The rendered ssh-config lives
+      # inside infra/keys/<role>/ already (render-ssh-config.sh writes
+      # it as ./config in each role's keys dir), so the existing
+      # /home/agent/.ssh:ro mount surfaces it at /home/agent/.ssh/config
+      # without needing a layered :ro file mount (Docker rejects
+      # layering a file mount inside a :ro directory mount).
+      # Per-host private keys, the cumulative known-hosts, and the
+      # audit-logging wrapper are mounted at independent paths.
+      - ./infra/keys/remote-hosts:/home/agent/.ssh-remote-hosts:ro
+      - ./.substrate-state/known-hosts:/home/agent/.ssh-known-hosts:ro
+      - ./infra/scripts/agent-ssh-audited.sh:/usr/local/bin/ssh:ro
     networks:
       - agent-net
     stdin_open: true
@@ -106,11 +121,19 @@ services:
       COMMISSION_PORT:   ${COMMISSION_PORT:-}
       COMMISSION_TOKEN:  ${COMMISSION_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # s010: convenience env (durable record is /substrate/remote-hosts.txt).
+      SUBSTRATE_REMOTE_HOSTS: ${SUBSTRATE_REMOTE_HOSTS:-}
     volumes:
       - coder-daemon-state:/data
       - claude-state-shared:/home/agent/.claude
       - ./methodology:/methodology:ro
       - ./infra/keys/coder:/home/agent/.ssh:ro
+      # s010: remote-host integration — same shape as architect.
+      - ./.substrate-state/remote-hosts.txt:/substrate/remote-hosts.txt:ro
+      - ./infra/keys/remote-hosts:/home/agent/.ssh-remote-hosts:ro
+      - ./.substrate-state/known-hosts:/home/agent/.ssh-known-hosts:ro
+      - ./.substrate-state/ssh-config:/home/agent/.ssh/config:ro
+      - ./infra/scripts/agent-ssh-audited.sh:/usr/local/bin/ssh:ro
     networks:
       - agent-net
 
@@ -126,10 +149,18 @@ services:
     profiles: ["ephemeral"]
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # s010: convenience env (durable record is /substrate/remote-hosts.txt).
+      SUBSTRATE_REMOTE_HOSTS: ${SUBSTRATE_REMOTE_HOSTS:-}
     volumes:
       - claude-state-shared:/home/agent/.claude
       - ./methodology:/methodology:ro
       - ./infra/keys/auditor:/home/agent/.ssh:ro
+      # s010: remote-host integration — same shape as architect.
+      - ./.substrate-state/remote-hosts.txt:/substrate/remote-hosts.txt:ro
+      - ./infra/keys/remote-hosts:/home/agent/.ssh-remote-hosts:ro
+      - ./.substrate-state/known-hosts:/home/agent/.ssh-known-hosts:ro
+      - ./.substrate-state/ssh-config:/home/agent/.ssh/config:ro
+      - ./infra/scripts/agent-ssh-audited.sh:/usr/local/bin/ssh:ro
     networks:
       - agent-net
     stdin_open: true
