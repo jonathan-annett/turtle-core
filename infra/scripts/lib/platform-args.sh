@@ -42,6 +42,8 @@ platform_args_init() {
     _pa_add_platform=""
     _pa_add_devices=()
     _pa_force=0
+    _pa_platform_supplied=0
+    _pa_device_supplied=0
 }
 
 # Consume one argument from argv. Recognised forms:
@@ -55,6 +57,7 @@ platform_args_consume() {
     local arg="$1"
     case "${arg}" in
         --platform=*)
+            _pa_platform_supplied=1
             local val="${arg#--platform=}"
             local IFS=','
             for p in ${val}; do
@@ -64,6 +67,7 @@ platform_args_consume() {
             return 0
             ;;
         --device=*)
+            _pa_device_supplied=1
             local val="${arg#--device=}"
             local IFS=','
             for d in ${val}; do
@@ -173,6 +177,8 @@ platform_args_finalize() {
         SUBSTRATE_ADD_DEVICES=""
     fi
     SUBSTRATE_FORCE="${_pa_force}"
+    SUBSTRATE_PLATFORM_SUPPLIED="${_pa_platform_supplied}"
+    SUBSTRATE_DEVICE_SUPPLIED="${_pa_device_supplied}"
     if [ "${#missing_devices[@]}" -gt 0 ]; then
         SUBSTRATE_DEVICE_REQUIRED_MISSING=$(IFS=$'\n'; printf '%s' "${missing_devices[*]}")
     else
@@ -180,7 +186,8 @@ platform_args_finalize() {
     fi
     export SUBSTRATE_PLATFORMS SUBSTRATE_DEVICES \
            SUBSTRATE_ADD_PLATFORM SUBSTRATE_ADD_DEVICES \
-           SUBSTRATE_FORCE SUBSTRATE_DEVICE_REQUIRED_MISSING
+           SUBSTRATE_FORCE SUBSTRATE_PLATFORM_SUPPLIED \
+           SUBSTRATE_DEVICE_SUPPLIED SUBSTRATE_DEVICE_REQUIRED_MISSING
 
     # First emission of the missing-device warning. setup-common.sh
     # repeats it at the end of setup so it's the last thing the human

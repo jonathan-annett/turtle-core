@@ -107,6 +107,19 @@ if [ "${do_install_docker}" -eq 1 ]; then
     exec "${repo_root}/install-docker.sh"
 fi
 
+# s009 9.e: --add-platform / --add-device dispatch a one-shot extension
+# of an already-running substrate. Refuse combination with the initial-
+# setup --platform / --device flags.
+if [ -n "${SUBSTRATE_ADD_PLATFORM:-}" ] || [ -n "${SUBSTRATE_ADD_DEVICES:-}" ]; then
+    if [ "${SUBSTRATE_PLATFORM_SUPPLIED:-0}" = "1" ] || [ "${SUBSTRATE_DEVICE_SUPPLIED:-0}" = "1" ]; then
+        echo "setup-mac.sh: --add-platform / --add-device cannot be combined with --platform / --device." >&2
+        echo "  --platform / --device are for initial substrate setup." >&2
+        echo "  --add-platform / --add-device extend a running substrate in place." >&2
+        exit 2
+    fi
+    exec "${repo_root}/infra/scripts/add-platform-device.sh"
+fi
+
 # ---------------------------------------------------------------------------
 # Detect a running Docker runtime. Docker Desktop OR Colima both work.
 # ---------------------------------------------------------------------------
