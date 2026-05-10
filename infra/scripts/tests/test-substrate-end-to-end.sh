@@ -1299,6 +1299,327 @@ else
     fail "phase 16: agent-coder-daemon:latest image ID changed (rebuild happened — should not for --add-device)"
 fi
 
+# ===========================================================================
+# Phase 17 — s010 remote-host registration loopback.
+#
+# Brings up two alpine+sshd sidecar containers as "remote targets" on
+# the test's scratch network, pre-installs an operator bootstrap key in
+# each (simulating the operator's pre-existing passwordless SSH+sudo
+# access from their shell), runs the substrate's bootstrap-remote-host.sh
+# against the first target, asserts the artifacts (per-host key file,
+# known-hosts entry, state-file row, ssh-config stanza, audit-log
+# capture from a stub coder-daemon), then exercises --add-remote-host
+# against the second target and asserts the same artifacts plus
+# functional reachability of both.
+#
+# Hardware-less by design — the real-hardware fixture (T-Dongle-S3 on
+# the Orange Pi) is the manual procedure at
+# infra/scripts/tests/manual/remote-host-tdongle.md.
+# ===========================================================================
+hr; echo "Phase 17: remote-host registration loopback (s010)"
+
+phase17_dir="${work_dir}/phase17"
+mkdir -p "${phase17_dir}"
+
+# Operator bootstrap keypair — used once to install the substrate's
+# pubkey on each sidecar (mirroring the precondition that the operator
+# already has passwordless SSH+sudo to the target before registering).
+ssh-keygen -t ed25519 -N '' \
+    -f "${phase17_dir}/operator_id_ed25519" \
+    -C "phase17-operator" -q
+
+# Build the alpine+sshd image. Pre-install the operator's pubkey in the
+# sidecar's authorized_keys so step 4 of bootstrap can connect non-
+# interactively.
+cp "${phase17_dir}/operator_id_ed25519.pub" "${phase17_dir}/authorized_keys"
+cat > "${phase17_dir}/Dockerfile" <<'DOCKERFILE'
+FROM alpine:3.19
+RUN apk add --no-cache openssh-server bash sudo python3 \
+ && ssh-keygen -A \
+ && adduser -D -s /bin/bash s010user \
+ && echo 's010user:s010-phase17-password' | chpasswd \
+ && echo 's010user ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/s010user \
+ && chmod 0440 /etc/sudoers.d/s010user \
+ && mkdir -p /home/s010user/.ssh \
+ && chown s010user:s010user /home/s010user/.ssh \
+ && chmod 0700 /home/s010user/.ssh
+COPY authorized_keys /home/s010user/.ssh/authorized_keys
+RUN chown s010user:s010user /home/s010user/.ssh/authorized_keys \
+ && chmod 0600 /home/s010user/.ssh/authorized_keys
+EXPOSE 22
+CMD ["/usr/sbin/sshd", "-D", "-e"]
+DOCKERFILE
+
+phase17_sshd_image="test-s010-${test_pid}-sshd"
+if docker build -q -t "${phase17_sshd_image}:latest" \
+        "${phase17_dir}" >"${phase17_dir}/build.log" 2>&1; then
+    pass "phase 17: sshd sidecar image built"
+    s009_tags_to_rmi+=("${phase17_sshd_image}:latest")
+else
+    fail "phase 17: sshd sidecar image build failed"
+    tail -10 "${phase17_dir}/build.log" | sed 's/^/  /'
+    # No point continuing the phase without sidecars.
+    docker rm -f "test-s010-${test_pid}-sshd1" "test-s010-${test_pid}-sshd2" >/dev/null 2>&1 || true
+    hr
+    printf "Summary: ${GREEN}%d passed${NC}, " "${pass_count}"
+    if [ "${fail_count}" -gt 0 ]; then
+        printf "${RED}%d failed${NC}\n" "${fail_count}"
+        exit 1
+    fi
+    printf "${GREEN}%d failed${NC}\n" "${fail_count}"
+    exit 0
+fi
+
+# Spin up two sidecars on the test's scratch network so the bootstrap
+# can reach them by container IP. agent-coder-daemon (when later run on
+# the same network) reaches them by the same IP, which is what the
+# rendered ssh-config stanza will reference.
+phase17_sidecar_1="test-s010-${test_pid}-sshd1"
+phase17_sidecar_2="test-s010-${test_pid}-sshd2"
+docker run -d --rm --name "${phase17_sidecar_1}" \
+    --network "${network}" \
+    "${phase17_sshd_image}:latest" >/dev/null
+docker run -d --rm --name "${phase17_sidecar_2}" \
+    --network "${network}" \
+    "${phase17_sshd_image}:latest" >/dev/null
+
+# Cleanup wiring — cover the case where the test bails out during
+# this phase.
+phase17_cleanup() {
+    docker rm -f "${phase17_sidecar_1}" "${phase17_sidecar_2}" >/dev/null 2>&1 || true
+}
+eval "_pre17_s007_cleanup_test() $(declare -f cleanup_test | sed -n '/^{/,$p')"
+cleanup_test() {
+    phase17_cleanup
+    _pre17_s007_cleanup_test
+}
+
+# Wait for both sshd's to bind.
+sleep 2
+sidecar_1_ip=$(docker inspect -f '{{(index .NetworkSettings.Networks "'"${network}"'").IPAddress}}' "${phase17_sidecar_1}")
+sidecar_2_ip=$(docker inspect -f '{{(index .NetworkSettings.Networks "'"${network}"'").IPAddress}}' "${phase17_sidecar_2}")
+if [ -n "${sidecar_1_ip}" ] && [ -n "${sidecar_2_ip}" ]; then
+    pass "phase 17: sidecars up at ${sidecar_1_ip} / ${sidecar_2_ip}"
+else
+    fail "phase 17: sidecar IPs missing (1='${sidecar_1_ip}' 2='${sidecar_2_ip}')"
+fi
+
+# Phase 17 uses an isolated substrate state directory + isolated keys
+# tree so the host's real registrations aren't touched. The bootstrap
+# script and validator both honor REMOTE_HOST_REPO_ROOT when sourced
+# directly, but as scripts they look at the script-relative repo root.
+# We swap-and-restore the repo's .substrate-state and infra/keys/
+# remote-hosts/ for the duration of phase 17.
+phase17_state_save=""
+phase17_keys_save=""
+phase17_role_keys_save=""
+if [ -e "${repo_root}/.substrate-state" ]; then
+    phase17_state_save="${repo_root}/.substrate-state.s010-saved-${test_pid}"
+    mv "${repo_root}/.substrate-state" "${phase17_state_save}"
+fi
+if [ -d "${repo_root}/infra/keys/remote-hosts" ]; then
+    phase17_keys_save="${repo_root}/infra/keys/remote-hosts.s010-saved-${test_pid}"
+    mv "${repo_root}/infra/keys/remote-hosts" "${phase17_keys_save}"
+fi
+mkdir -p "${repo_root}/infra/keys/remote-hosts" "${repo_root}/.substrate-state"
+chmod 0700 "${repo_root}/infra/keys/remote-hosts"
+# Snapshot any pre-existing per-role config files so we can restore
+# them at end of phase. These may exist if the human has run setup
+# with --remote-host already.
+for role in architect coder auditor; do
+    if [ -f "${repo_root}/infra/keys/${role}/config" ]; then
+        cp "${repo_root}/infra/keys/${role}/config" \
+            "${phase17_dir}/role-${role}-config.saved" 2>/dev/null || true
+    fi
+done
+
+phase17_restore() {
+    rm -rf "${repo_root}/.substrate-state" \
+           "${repo_root}/infra/keys/remote-hosts" 2>/dev/null || true
+    if [ -n "${phase17_state_save}" ] && [ -e "${phase17_state_save}" ]; then
+        mv "${phase17_state_save}" "${repo_root}/.substrate-state"
+    fi
+    if [ -n "${phase17_keys_save}" ] && [ -e "${phase17_keys_save}" ]; then
+        mv "${phase17_keys_save}" "${repo_root}/infra/keys/remote-hosts"
+    fi
+    for role in architect coder auditor; do
+        if [ -f "${phase17_dir}/role-${role}-config.saved" ]; then
+            cp "${phase17_dir}/role-${role}-config.saved" \
+                "${repo_root}/infra/keys/${role}/config" 2>/dev/null || true
+        else
+            rm -f "${repo_root}/infra/keys/${role}/config" 2>/dev/null || true
+        fi
+    done
+}
+# Wire restore into the cleanup chain too.
+eval "_pre17b_cleanup_test() $(declare -f cleanup_test | sed -n '/^{/,$p')"
+cleanup_test() {
+    phase17_restore
+    _pre17b_cleanup_test
+}
+
+# An ssh-agent loaded with the operator key — the bootstrap's step 4
+# uses the operator's loaded credentials (no -i flag). step 5
+# (verification) sets IdentitiesOnly=yes + -F /dev/null, which excludes
+# agent identities, so it gets the substrate-key-only auth we want.
+eval "$(ssh-agent -s)" >/dev/null
+phase17_agent_pid="${SSH_AGENT_PID:-}"
+ssh-add "${phase17_dir}/operator_id_ed25519" >/dev/null 2>&1
+phase17_agent_cleanup() {
+    if [ -n "${phase17_agent_pid}" ]; then
+        kill "${phase17_agent_pid}" >/dev/null 2>&1 || true
+    fi
+}
+eval "_pre17c_cleanup_test() $(declare -f cleanup_test | sed -n '/^{/,$p')"
+cleanup_test() {
+    phase17_agent_cleanup
+    _pre17c_cleanup_test
+}
+
+# Initial registration — drive bootstrap-remote-host.sh directly.
+SUBSTRATE_REMOTE_HOSTS="ci-target=s010user@${sidecar_1_ip}:22" \
+bash "${repo_root}/infra/scripts/bootstrap-remote-host.sh" \
+    >"${phase17_dir}/bootstrap-1.log" 2>&1
+phase17_rc=$?
+
+if [ "${phase17_rc}" -eq 0 ]; then
+    pass "phase 17: bootstrap-remote-host.sh succeeded for ci-target"
+else
+    fail "phase 17: bootstrap-remote-host.sh failed (rc=${phase17_rc})"
+    tail -20 "${phase17_dir}/bootstrap-1.log" | sed 's/^/  /'
+fi
+
+bash "${repo_root}/infra/scripts/render-ssh-config.sh" >/dev/null 2>&1
+
+# Artifact assertions.
+if [ -f "${repo_root}/infra/keys/remote-hosts/ci-target/id_ed25519" ]; then
+    pass "phase 17: per-host private key present"
+else
+    fail "phase 17: per-host private key missing"
+fi
+if grep -qF "${sidecar_1_ip}" "${repo_root}/.substrate-state/known-hosts" 2>/dev/null; then
+    pass "phase 17: known-hosts contains the sidecar's host key"
+else
+    fail "phase 17: known-hosts missing the sidecar entry"
+fi
+if grep -qE "^ci-target	s010user	${sidecar_1_ip}	22\$" "${repo_root}/.substrate-state/remote-hosts.txt" 2>/dev/null; then
+    pass "phase 17: remote-hosts.txt has ci-target row"
+else
+    fail "phase 17: remote-hosts.txt row mismatch"
+fi
+if grep -qF "Host ci-target" "${repo_root}/.substrate-state/ssh-config" 2>/dev/null; then
+    pass "phase 17: ssh-config has 'Host ci-target' stanza"
+else
+    fail "phase 17: ssh-config missing ci-target stanza"
+fi
+if [ -f "${repo_root}/infra/keys/coder/config" ] && \
+   grep -qF "Host ci-target" "${repo_root}/infra/keys/coder/config"; then
+    pass "phase 17: per-role config (coder) mirrors the canonical ssh-config"
+else
+    fail "phase 17: per-role config (coder) missing or stale"
+fi
+
+# Reachability from a stub coder-daemon-style container, with the
+# wrapper installed. WORKDIR=/work picks up the audit log there.
+phase17_workdir="${phase17_dir}/work"
+mkdir -p "${phase17_workdir}"
+chmod 0777 "${phase17_workdir}"
+
+phase17_run_in_container() {
+    docker run --rm \
+        --network "${network}" \
+        -v "${repo_root}/infra/keys/coder:/home/agent/.ssh:ro" \
+        -v "${repo_root}/infra/keys/remote-hosts:/home/agent/.ssh-remote-hosts:ro" \
+        -v "${repo_root}/.substrate-state/known-hosts:/home/agent/.ssh-known-hosts:ro" \
+        -v "${repo_root}/infra/scripts/agent-ssh-audited.sh:/usr/local/bin/ssh:ro" \
+        -v "${phase17_workdir}:/work" \
+        -e WORKDIR=/work \
+        -u 1000:1000 \
+        --entrypoint bash \
+        agent-coder-daemon:latest \
+        -c "$1"
+}
+
+if phase17_run_in_container 'ssh ci-target true' >/dev/null 2>&1; then
+    pass "phase 17: 'ssh ci-target true' from coder-daemon returns 0"
+else
+    fail "phase 17: 'ssh ci-target true' did not exit 0"
+fi
+
+if [ -s "${phase17_workdir}/.substrate-ssh.log" ] && \
+   grep -qF 'ssh ci-target' "${phase17_workdir}/.substrate-ssh.log"; then
+    pass "phase 17: audit log captured the ssh invocation"
+else
+    fail "phase 17: audit log empty or missing ci-target line"
+fi
+
+# --add-remote-host on the running substrate. The phase has no
+# ephemeral-role containers running (the test compose project has
+# planner / coder-daemon scaled to zero or only ran one-shot earlier),
+# but to be safe we set ROLE_IMAGE_PATTERNS to a no-op so the pre-flight
+# refusal doesn't trip on the leftover stub-coder image from earlier
+# phases.
+SUBSTRATE_ADD_REMOTE_HOST="ci-target-2=s010user@${sidecar_2_ip}:22" \
+SUBSTRATE_FORCE=0 \
+ROLE_IMAGE_PATTERNS="agent-${test_pid}-no-such-image:latest" \
+PLATFORM_REPO_ROOT="${repo_root}" \
+bash "${repo_root}/infra/scripts/add-platform-device.sh" \
+    >"${phase17_dir}/add-rh.log" 2>&1
+phase17_add_rc=$?
+
+if [ "${phase17_add_rc}" -eq 0 ]; then
+    pass "phase 17: --add-remote-host=ci-target-2 succeeded"
+else
+    fail "phase 17: --add-remote-host failed (rc=${phase17_add_rc})"
+    tail -20 "${phase17_dir}/add-rh.log" | sed 's/^/  /'
+fi
+
+if grep -qE "^ci-target-2	s010user	${sidecar_2_ip}	22\$" "${repo_root}/.substrate-state/remote-hosts.txt" 2>/dev/null; then
+    pass "phase 17: remote-hosts.txt now has ci-target-2 row"
+else
+    fail "phase 17: ci-target-2 row missing after add"
+fi
+
+# Both hosts reachable from the same container; ssh-config has both.
+if phase17_run_in_container 'set -e; ssh ci-target true; ssh ci-target-2 true' >/dev/null 2>&1; then
+    pass "phase 17: both ci-target and ci-target-2 reachable from coder-daemon"
+else
+    fail "phase 17: at least one of ci-target / ci-target-2 not reachable"
+fi
+
+# Idempotency: re-bootstrap of an already-registered host short-circuits.
+SUBSTRATE_REMOTE_HOSTS="ci-target=s010user@${sidecar_1_ip}:22" \
+bash "${repo_root}/infra/scripts/bootstrap-remote-host.sh" \
+    >"${phase17_dir}/idempotent.log" 2>&1
+if grep -qF "already registered, skipping" "${phase17_dir}/idempotent.log"; then
+    pass "phase 17: re-bootstrap of ci-target hits the idempotency short-circuit"
+else
+    fail "phase 17: idempotency short-circuit not observed"
+    tail -10 "${phase17_dir}/idempotent.log" | sed 's/^/  /'
+fi
+
+# Duplicate-name refusal on --add-remote-host.
+SUBSTRATE_ADD_REMOTE_HOST="ci-target=s010user@${sidecar_2_ip}:22" \
+SUBSTRATE_FORCE=0 \
+ROLE_IMAGE_PATTERNS="agent-${test_pid}-no-such-image:latest" \
+PLATFORM_REPO_ROOT="${repo_root}" \
+bash "${repo_root}/infra/scripts/add-platform-device.sh" \
+    >"${phase17_dir}/dup.log" 2>&1
+phase17_dup_rc=$?
+if [ "${phase17_dup_rc}" -ne 0 ] && \
+   grep -qF "already registered" "${phase17_dir}/dup.log"; then
+    pass "phase 17: --add-remote-host duplicate-name refused with the expected diagnostic"
+else
+    fail "phase 17: duplicate-name was not refused (rc=${phase17_dup_rc})"
+    tail -10 "${phase17_dir}/dup.log" | sed 's/^/  /'
+fi
+
+# Restore. cleanup_test will run the same on exit, but we run it now so
+# the phase's footprint disappears even if a later phase is added.
+phase17_restore
+phase17_agent_cleanup
+docker rm -f "${phase17_sidecar_1}" "${phase17_sidecar_2}" >/dev/null 2>&1 || true
+
 # ---------------------------------------------------------------------------
 hr
 printf "Summary: ${GREEN}%d passed${NC}, " "${pass_count}"
