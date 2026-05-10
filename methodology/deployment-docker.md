@@ -344,6 +344,7 @@ Out-of-allowlist actions deny and surface as task failure rather than blocking o
 
 - Interactive REPL, or stream-json with passthrough to the human.
 - `--permission-mode default` or `acceptEdits`.
+- `--allowed-tools` populated from the section brief's "Required tool surface" field (spec §7.2). The planner's entrypoint reads the field at container startup (only when commissioned non-interactively via `BOOTSTRAP_PROMPT`; manual-shell mode bypasses) and translates it into the flag value when invoking `claude -p`. If the brief lacks the field, the entrypoint fails fast with an actionable error rather than defaulting permissive or silently denying every git operation.
 
 Judgement role; the human is in the loop. The planner can ask for clarification when a brief is genuinely ambiguous, decompose tasks differently than first planned, or escalate to the architect.
 
@@ -351,6 +352,7 @@ Judgement role; the human is in the loop. The planner can ask for clarification 
 
 - Interactive, stream-json with passthrough for the check-in rule (see auditor-guide).
 - `--permission-mode acceptEdits` scoped to the auditor repo.
+- `--allowed-tools` populated from the audit brief's "Required tool surface" field (spec §7.6). Same mechanism as the planner: parsed at entrypoint startup in non-interactive bootstrap mode, fail-clean on absence or parse failure.
 
 Read-only access to the main repo is enforced by the Docker read-only volume mount (the auditor's main-repo clone is mounted `:ro`), not by permission mode. Permission mode governs the auditor repo where the audit report and supporting tooling live.
 
