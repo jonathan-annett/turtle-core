@@ -1,0 +1,51 @@
+# Platform: platformio-esp32
+#
+# Adds PlatformIO with the espressif32 platform pre-installed, so the
+# coder and auditor can build and flash ESP32 firmware. Auditor also
+# gets cppcheck for adversarial static analysis of embedded C.
+#
+# This is the canonical hardware-in-the-loop (HIL) platform: PlatformIO's
+# `pio test` defaults to flashing the test firmware to the device and
+# capturing pass/fail over the device's serial port. To exercise that
+# path the substrate must have a serial device passed through; declare
+# device_required: true so setup warns when --device is not supplied.
+# The agent user is added to the `dialout` supplementary group so it can
+# read/write /dev/ttyUSB* and /dev/ttyACM*.
+#
+# Without --device, the platform installs cleanly and `pio run` works
+# (compile-only); HIL test, flash, and serial monitor will not.
+#
+# Schema reference: methodology/platforms/README.md
+name: platformio-esp32
+description: PlatformIO with espressif32 toolchain (~500MB). Serial-port HIL testing — supply the ESP32 board via --device.
+roles:
+  coder-daemon:
+    apt: [python3-venv, python3-pip]
+    install:
+      - "python3 -m venv /home/agent/.platformio-venv"
+      - "/home/agent/.platformio-venv/bin/pip install --no-cache-dir platformio"
+      - "/home/agent/.platformio-venv/bin/pio platform install espressif32"
+    env:
+      PATH: "/home/agent/.platformio-venv/bin:${PATH}"
+    verify:
+      - "pio --version"
+      - "pio platform show espressif32 | head -1"
+  auditor:
+    apt: [python3-venv, python3-pip, cppcheck]
+    install:
+      - "python3 -m venv /home/agent/.platformio-venv"
+      - "/home/agent/.platformio-venv/bin/pip install --no-cache-dir platformio"
+      - "/home/agent/.platformio-venv/bin/pio platform install espressif32"
+    env:
+      PATH: "/home/agent/.platformio-venv/bin:${PATH}"
+    verify:
+      - "pio --version"
+      - "cppcheck --version"
+runtime:
+  device_required: true
+  device_hint: "ESP32 board on /dev/ttyUSB* or /dev/ttyACM*"
+  groups: [dialout]
+defaults:
+  test_runner: "pio test"
+  build_command: "pio run"
+  allowed_tools: [Bash, Read, Write, Edit]

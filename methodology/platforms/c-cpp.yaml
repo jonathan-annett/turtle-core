@@ -1,0 +1,30 @@
+# Platform: c-cpp
+#
+# Adds the standard C/C++ build and analysis chain (cmake, gdb, valgrind,
+# build-essential) to coder-daemon. Auditor additionally gets cppcheck
+# for adversarial static analysis.
+#
+# Coder-daemon already has build-essential baked into its static layer;
+# listing it again in apt is harmless (apt sees it as already installed).
+#
+# Schema reference: methodology/platforms/README.md
+name: c-cpp
+description: C/C++ with cmake, gdb, valgrind (auditor adds cppcheck) (~300MB).
+roles:
+  coder-daemon:
+    apt: [build-essential, cmake, gdb, valgrind]
+    verify:
+      - "g++ --version"
+      - "cmake --version"
+      - "valgrind --version"
+  auditor:
+    apt: [build-essential, cmake, gdb, valgrind, cppcheck]
+    verify:
+      - "g++ --version"
+      - "cmake --version"
+      - "valgrind --version"
+      - "cppcheck --version"
+defaults:
+  test_runner: "ctest --test-dir build"
+  build_command: "cmake -S . -B build && cmake --build build"
+  allowed_tools: [Bash, Read, Write, Edit]

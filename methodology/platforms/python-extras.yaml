@@ -1,0 +1,41 @@
+# Platform: python-extras
+#
+# Adds a Python 3 toolchain plus the three most-requested project tools
+# (uv, poetry, pytest) into a dedicated venv at /home/agent/.python-extras-venv.
+# The venv approach avoids Debian bookworm's PEP 668 'externally-managed
+# environment' protection on the system Python while still giving the
+# agent user a writable site-packages.
+#
+# Coder-daemon's static layer already ships python3, so we add only the
+# venv module here. Auditor needs python3 as well.
+#
+# Schema reference: methodology/platforms/README.md
+name: python-extras
+description: Python 3 with uv, poetry, pytest in a dedicated venv (~100MB).
+roles:
+  coder-daemon:
+    apt: [python3-venv]
+    install:
+      - "python3 -m venv /home/agent/.python-extras-venv"
+      - "/home/agent/.python-extras-venv/bin/pip install --no-cache-dir uv poetry pytest"
+    env:
+      PATH: "/home/agent/.python-extras-venv/bin:${PATH}"
+    verify:
+      - "uv --version"
+      - "poetry --version"
+      - "pytest --version"
+  auditor:
+    apt: [python3, python3-venv]
+    install:
+      - "python3 -m venv /home/agent/.python-extras-venv"
+      - "/home/agent/.python-extras-venv/bin/pip install --no-cache-dir uv poetry pytest"
+    env:
+      PATH: "/home/agent/.python-extras-venv/bin:${PATH}"
+    verify:
+      - "uv --version"
+      - "poetry --version"
+      - "pytest --version"
+defaults:
+  test_runner: "pytest"
+  build_command: ""
+  allowed_tools: [Bash, Read, Write, Edit]
