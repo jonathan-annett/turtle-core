@@ -21,16 +21,27 @@ cd "${repo_root}"
 #                                 (s009).
 #   --add-device=<host-path>[,...]  Extend a running substrate's device
 #                                 passthrough list (s009).
+#   --remote-host=<spec>[,<spec2>,...]
+#                                 Register one or more named remote hosts
+#                                 (s010). spec=<name>=<user>@<host>[:<port>].
+#   --add-remote-host=<spec>      Register a remote host on a running
+#                                 substrate (s010).
 #   --force                       Skip --add-* pre-flight checks.
 # ---------------------------------------------------------------------------
 # shellcheck source=infra/scripts/lib/platform-args.sh
 . "${repo_root}/infra/scripts/lib/platform-args.sh"
+# shellcheck source=infra/scripts/lib/remote-host-args.sh
+. "${repo_root}/infra/scripts/lib/remote-host-args.sh"
 platform_args_init
+remote_host_args_init
 
 do_install_docker=0
 do_adopt=0
 for arg in "$@"; do
     if platform_args_consume "${arg}"; then
+        continue
+    fi
+    if remote_host_args_consume "${arg}"; then
         continue
     fi
     case "$arg" in
@@ -61,6 +72,7 @@ Usage: ./setup-linux.sh [flags...]
 
 EOF
             platform_args_help_block
+            remote_host_args_help_block
             cat <<'EOF'
 
   Without flags, setup verifies your prerequisites and brings up the
@@ -87,6 +99,7 @@ fi
 # sourced; finalize the platform args only when we'll actually run setup.
 if [ "${do_install_docker}" -eq 0 ]; then
     platform_args_finalize
+    remote_host_args_finalize
 fi
 
 # --install-docker is a bootstrap-only mode: provision Docker and exit.
@@ -104,14 +117,17 @@ if [ "${do_install_docker}" -eq 1 ]; then
     exec "${repo_root}/install-docker.sh"
 fi
 
-# s009 9.e: --add-platform / --add-device dispatch a one-shot extension
-# of an already-running substrate. Refuse combination with the initial-
-# setup --platform / --device flags, which would be ambiguous.
-if [ -n "${SUBSTRATE_ADD_PLATFORM:-}" ] || [ -n "${SUBSTRATE_ADD_DEVICES:-}" ]; then
-    if [ "${SUBSTRATE_PLATFORM_SUPPLIED:-0}" = "1" ] || [ "${SUBSTRATE_DEVICE_SUPPLIED:-0}" = "1" ]; then
-        echo "setup-linux.sh: --add-platform / --add-device cannot be combined with --platform / --device." >&2
-        echo "  --platform / --device are for initial substrate setup." >&2
-        echo "  --add-platform / --add-device extend a running substrate in place." >&2
+# s009 9.e / s010 10.e: --add-platform / --add-device / --add-remote-host
+# dispatch a one-shot extension of an already-running substrate. Refuse
+# combination with the initial-setup --platform / --device / --remote-host
+# flags, which would be ambiguous.
+if [ -n "${SUBSTRATE_ADD_PLATFORM:-}" ] || [ -n "${SUBSTRATE_ADD_DEVICES:-}" ] || [ -n "${SUBSTRATE_ADD_REMOTE_HOST:-}" ]; then
+    if [ "${SUBSTRATE_PLATFORM_SUPPLIED:-0}" = "1" ] \
+       || [ "${SUBSTRATE_DEVICE_SUPPLIED:-0}" = "1" ] \
+       || [ "${SUBSTRATE_REMOTE_HOST_SUPPLIED:-0}" = "1" ]; then
+        echo "setup-linux.sh: --add-* cannot be combined with --platform / --device / --remote-host." >&2
+        echo "  --platform / --device / --remote-host are for initial substrate setup." >&2
+        echo "  --add-* extend a running substrate in place." >&2
         exit 2
     fi
     exec "${repo_root}/infra/scripts/add-platform-device.sh"
