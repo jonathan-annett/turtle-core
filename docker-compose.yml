@@ -80,9 +80,14 @@ services:
 
   # ---------------------------------------------------------------------------
   # coder-daemon: ephemeral, paired with planner. HTTP commissioning service.
+  # Built from Dockerfile.generated, rendered at setup time by
+  # infra/scripts/render-dockerfile.sh from the role's static Dockerfile
+  # plus the selected platform plugin layer(s) (s009).
   # ---------------------------------------------------------------------------
   coder-daemon:
-    build: ./infra/coder-daemon
+    build:
+      context: ./infra/coder-daemon
+      dockerfile: Dockerfile.generated
     image: agent-coder-daemon:latest
     profiles: ["ephemeral"]
     environment:
@@ -99,9 +104,12 @@ services:
 
   # ---------------------------------------------------------------------------
   # auditor: ephemeral, per audit. Started by audit.sh.
+  # Built from Dockerfile.generated (s009; see coder-daemon comment).
   # ---------------------------------------------------------------------------
   auditor:
-    build: ./infra/auditor
+    build:
+      context: ./infra/auditor
+      dockerfile: Dockerfile.generated
     image: agent-auditor:latest
     profiles: ["ephemeral"]
     environment:

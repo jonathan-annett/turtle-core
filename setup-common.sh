@@ -124,12 +124,78 @@ done
 # 5. Build images. agent-base must build first because the role Dockerfiles
 #    reference 'FROM agent-base'. Compose alone doesn't order non-service
 #    builds, so we drive the base build explicitly.
+#
+# s009: before compose build, render Dockerfile.generated for coder-daemon
+# and auditor from the static template plus the selected platform plugins,
+# and render the device-passthrough override file when --device was given.
+# SUBSTRATE_PLATFORMS / SUBSTRATE_DEVICES were exported by the entrypoint's
+# platform_args_finalize call (see infra/scripts/lib/platform-args.sh).
 # ---------------------------------------------------------------------------
+: "${SUBSTRATE_PLATFORMS:=default}"
+: "${SUBSTRATE_DEVICES:=}"
+
+log "Rendering role Dockerfiles for platforms: ${SUBSTRATE_PLATFORMS}..."
+"${repo_root}/infra/scripts/render-dockerfile.sh" coder-daemon "${SUBSTRATE_PLATFORMS}"
+"${repo_root}/infra/scripts/render-dockerfile.sh" auditor       "${SUBSTRATE_PLATFORMS}"
+
+log "Rendering device-passthrough override (devices=${SUBSTRATE_DEVICES:-none})..."
+"${repo_root}/infra/scripts/render-device-override.sh" "${SUBSTRATE_DEVICES}"
+
 log "Building agent-base image..."
 docker build -t agent-base:latest "${repo_root}/infra/base"
 
 log "Building role images via docker compose..."
 docker compose --profile ephemeral build
+
+# ---------------------------------------------------------------------------
+# 5.5 Setup-time verify per platform per role. The image-build phase ran
+#     each platform's verify list once already (Dockerfile RUN), so this
+#     is a green-tick check that proves the just-built image still
+#     exercises the toolchain (and that the verify commands don't depend
+#     on /work or git-server, which aren't up yet).
+#
+#     We bypass each role's ENTRYPOINT (which starts the daemon /
+#     clones repos) by running the image directly with bash. Failure
+#     aborts setup.
+# ---------------------------------------------------------------------------
+log "Verifying platform toolchains in role images..."
+verify_failed=()
+for platform in ${SUBSTRATE_PLATFORMS//,/ }; do
+    [ "${platform}" = "default" ] && continue
+    yaml_file="${repo_root}/methodology/platforms/${platform}.yaml"
+    for role in coder-daemon auditor; do
+        image="agent-${role}:latest"
+        # Single yq → json call per (platform, role); python prints one
+        # cmd per line.
+        verify_json=$(docker run --rm \
+            -v "${repo_root}/methodology/platforms:/p:ro" \
+            mikefarah/yq:4 -o=json ".roles.\"${role}\".verify // []" \
+            "/p/${platform}.yaml" 2>/dev/null || echo "[]")
+        cmds=$(printf '%s' "${verify_json}" | python3 -c '
+import json, sys
+for c in json.loads(sys.stdin.read()):
+    print(c)
+')
+        [ -z "${cmds}" ] && continue
+        while IFS= read -r cmd; do
+            [ -z "${cmd}" ] && continue
+            if docker run --rm --entrypoint bash "${image}" -lc "${cmd}" \
+                >/dev/null 2>&1; then
+                log "  [verify ok] ${platform}/${role}: ${cmd}"
+            else
+                log "  [verify FAIL] ${platform}/${role}: ${cmd}"
+                verify_failed+=("${platform}/${role}: ${cmd}")
+            fi
+        done <<<"${cmds}"
+    done
+done
+if [ "${#verify_failed[@]}" -gt 0 ]; then
+    echo "[setup] FATAL: setup-time verify failed for the following:" >&2
+    for entry in "${verify_failed[@]}"; do
+        echo "  - ${entry}" >&2
+    done
+    die "platform verify failures (see above) — fix the platform YAML or the host environment, then re-run setup."
+fi
 
 # ---------------------------------------------------------------------------
 # 6. Bring up the long-lived services.
@@ -236,6 +302,33 @@ docker compose exec -T git-server /srv/init-repos.sh
 log "Running verify.sh as final sanity check..."
 if ! bash "${repo_root}/verify.sh"; then
     die "verify.sh failed; setup is incomplete."
+fi
+
+# ---------------------------------------------------------------------------
+# 9.5 s009: re-emit the device_required warning so it's the LAST thing the
+#     human sees before setup completes. Easy to miss in scrollback otherwise
+#     (the brief flagged this explicitly).
+# ---------------------------------------------------------------------------
+if [ -n "${SUBSTRATE_DEVICE_REQUIRED_MISSING:-}" ]; then
+    echo
+    echo "================================================================================"
+    echo "  REMINDER: device_required platform(s) without --device:"
+    echo "================================================================================"
+    while IFS= read -r entry; do
+        [ -z "${entry}" ] && continue
+        pname="${entry%%|*}"
+        phint="${entry#*|}"
+        echo "    - ${pname}: ${phint}"
+    done <<<"${SUBSTRATE_DEVICE_REQUIRED_MISSING}"
+    echo
+    echo "  HIL test/flash/serial-monitor will not work for these platforms until you"
+    echo "  add a device. Either run:"
+    echo
+    echo "      ./setup-linux.sh --add-device=<host-path>"
+    echo
+    echo "  on the running substrate, or re-run setup with --device=<host-path>."
+    echo "================================================================================"
+    echo
 fi
 
 # ---------------------------------------------------------------------------
