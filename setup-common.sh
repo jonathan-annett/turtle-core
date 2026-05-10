@@ -231,6 +231,28 @@ chmod 0755 "${state_dir}"
 log "Wrote substrate state to ${state_dir}/{platforms,devices}.txt"
 
 # ---------------------------------------------------------------------------
+# 5.8 s010: bootstrap remote hosts (--remote-host=...). Generates per-host
+#     SSH keys under infra/keys/remote-hosts/<name>/, captures host keys
+#     into .substrate-state/known-hosts, installs the substrate's pubkey
+#     on each target using the operator's existing SSH credentials, and
+#     verifies passwordless SSH+sudo+python3 with the substrate key alone.
+#     The remote-hosts.txt state file is updated incrementally (append-if-
+#     missing) so re-running setup without --remote-host preserves prior
+#     registrations.
+#
+#     known-hosts is touched here so it exists as a bind-mount source
+#     even when no remote hosts are registered (empty file satisfies
+#     Docker). ssh-config is the same shape but rendered in 10.d.
+# ---------------------------------------------------------------------------
+touch "${state_dir}/remote-hosts.txt" "${state_dir}/known-hosts"
+chmod 0644 "${state_dir}/remote-hosts.txt" "${state_dir}/known-hosts"
+
+if [ -n "${SUBSTRATE_REMOTE_HOSTS:-}" ]; then
+    log "Bootstrapping remote hosts: ${SUBSTRATE_REMOTE_HOSTS}"
+    "${repo_root}/infra/scripts/bootstrap-remote-host.sh"
+fi
+
+# ---------------------------------------------------------------------------
 # 6. Bring up the long-lived services.
 # ---------------------------------------------------------------------------
 log "Starting long-lived services (git-server, architect)..."
