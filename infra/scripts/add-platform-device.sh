@@ -62,9 +62,28 @@ mkdir -p "${state_dir}"
 # ---------------------------------------------------------------------------
 running_role_containers() {
     local out=()
-    for img in agent-planner agent-coder-daemon agent-auditor; do
+    # ROLE_IMAGE_PATTERNS is colon-separated; each entry is a literal
+    # "<image>:<tag>" (or just "<image>" — defaults to ":latest"). The
+    # default scans the canonical role image tags; the substrate end-
+    # to-end test overrides it to scan its own scratch-tagged images.
+    local patterns="${ROLE_IMAGE_PATTERNS:-agent-planner:latest:agent-coder-daemon:latest:agent-auditor:latest}"
+    # Trickier than usual to split because the entries themselves
+    # contain ':'. Use a space-separated alternative if the env var is
+    # set with spaces; otherwise interpret as the canonical default.
+    local images=()
+    if [ -n "${ROLE_IMAGE_PATTERNS:-}" ]; then
+        IFS=' ' read -ra images <<<"${ROLE_IMAGE_PATTERNS}"
+    else
+        images=(agent-planner:latest agent-coder-daemon:latest agent-auditor:latest)
+    fi
+    for img in "${images[@]}"; do
+        # Default to :latest if no tag specified.
+        case "${img}" in
+            *:*) ;;
+            *)   img="${img}:latest" ;;
+        esac
         local cids
-        cids=$(docker ps --format '{{.ID}} {{.Image}} {{.Names}}' | awk -v img="${img}:latest" '$2==img {print $3":"$1}')
+        cids=$(docker ps --format '{{.ID}} {{.Image}} {{.Names}}' | awk -v img="${img}" '$2==img {print $3":"$1}')
         if [ -n "${cids}" ]; then
             while IFS= read -r line; do
                 [ -n "${line}" ] && out+=("${line}")
@@ -83,7 +102,7 @@ running_role_containers() {
 # fail safe and refuse (the human can --force).
 # ---------------------------------------------------------------------------
 pending_section_branches() {
-    if ! docker inspect -f '{{.State.Running}}' agent-git-server 2>/dev/null | grep -q '^true$'; then
+    if ! docker inspect -f '{{.State.Running}}' "${GIT_SERVER_CONTAINER:-agent-git-server}" 2>/dev/null | grep -q '^true$'; then
         echo "GIT_SERVER_DOWN"
         return
     fi
@@ -92,12 +111,12 @@ pending_section_branches() {
         [ -z "${ref}" ] && continue
         local short="${ref#refs/heads/}"
         local count
-        count=$(docker exec agent-git-server git --git-dir=/srv/git/main.git \
+        count=$(docker exec "${GIT_SERVER_CONTAINER:-agent-git-server}" git --git-dir=/srv/git/main.git \
             rev-list --count "main..${short}" 2>/dev/null || echo 0)
         if [ "${count}" -gt 0 ] 2>/dev/null; then
             out+=("${short} (+${count} commits)")
         fi
-    done < <(docker exec agent-git-server git --git-dir=/srv/git/main.git \
+    done < <(docker exec "${GIT_SERVER_CONTAINER:-agent-git-server}" git --git-dir=/srv/git/main.git \
         for-each-ref --format='%(refname)' refs/heads/section/ 2>/dev/null)
     if [ "${#out[@]}" -gt 0 ]; then
         printf '%s\n' "${out[@]}"

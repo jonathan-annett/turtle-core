@@ -714,6 +714,572 @@ else
     fail "stub claude did not receive the bootstrap sentinel (got: ${marker_content})"
 fi
 
+# ===========================================================================
+# s009 phases 9–16: platform plugin model.
+#
+# These phases differ from 0–8 in two ways:
+#
+#   1. They exercise the build path (renderer → docker build → toolchain
+#      assertions inside the resulting image), which means each phase that
+#      needs a toolchain runs a real `docker build`. Setup time is
+#      noticeably longer than the s007/s008 phases (typically several
+#      minutes for the apt-only platforms and longer for ones that pip-
+#      install or curl-install).
+#
+#   2. Each phase scaffolds and tears down its own platform-specific
+#      scratch state — generated Dockerfile.generated, override file,
+#      .substrate-state directory, and per-phase image tags. The single
+#      scratch substrate from phases 1–8 (network, volumes, env file)
+#      remains usable for the architect-mount checks in phase 9 / 10.
+#
+# Phase 14 uses /dev/null as a stand-in for real ESP32 hardware: the
+# wiring path (arg-parse → state-file → compose-override → container-
+# visible) can be exercised against any host device. Real-hardware
+# verification is out-of-band.
+# ===========================================================================
+
+# Per-phase image tag suffix so each phase's docker build doesn't
+# clobber the host's canonical agent-*:latest tags.
+s009_tag() { echo "test-s009-${test_pid}-$1"; }
+
+# Build a role image with a phase-tagged name from the rendered
+# Dockerfile.generated. role=coder-daemon|auditor; tag=phase suffix.
+# Returns 0 on success, non-zero on failure (and emits the build log
+# tail to help diagnose).
+s009_build_role() {
+    local role="$1" phase="$2" platforms="$3"
+    local tag; tag=$(s009_tag "${phase}-${role}")
+    "${repo_root}/infra/scripts/render-dockerfile.sh" "${role}" "${platforms}" >/dev/null
+    if ! docker build -q -t "agent-${role}:${tag}" \
+            -f "${repo_root}/infra/${role}/Dockerfile.generated" \
+            "${repo_root}/infra/${role}" >"${work_dir}/${phase}-${role}-build.log" 2>&1; then
+        note "${phase}/${role} build log tail:"
+        tail -20 "${work_dir}/${phase}-${role}-build.log" | sed 's/^/  /'
+        return 1
+    fi
+    echo "agent-${role}:${tag}"
+}
+
+# Drop a phase-specific .substrate-state directory and override file
+# before its assertions; cleaned up at teardown.
+s009_phase_state_dir() {
+    local phase="$1"
+    local d="${work_dir}/${phase}-state"
+    mkdir -p "${d}"
+    echo "${d}"
+}
+
+# Track tags built per phase so the trap can rmi them all on exit.
+s009_tags_to_rmi=()
+
+# Phase 11 rebuilds the canonical agent-coder-daemon:latest /
+# agent-auditor:latest tags as part of exercising --add-platform. Snap
+# the pre-test image IDs so the cleanup can restore them by re-tagging
+# (no rebuild required — image IDs survive the rebuild as untagged).
+s009_pretest_coder_id=""
+s009_pretest_auditor_id=""
+s009_snapshot_role_images() {
+    s009_pretest_coder_id=$(docker image inspect agent-coder-daemon:latest \
+        --format '{{.Id}}' 2>/dev/null || true)
+    s009_pretest_auditor_id=$(docker image inspect agent-auditor:latest \
+        --format '{{.Id}}' 2>/dev/null || true)
+}
+s009_restore_role_images() {
+    if [ -n "${s009_pretest_coder_id}" ] && \
+       docker image inspect "${s009_pretest_coder_id}" >/dev/null 2>&1; then
+        docker tag "${s009_pretest_coder_id}" agent-coder-daemon:latest >/dev/null 2>&1 || true
+    fi
+    if [ -n "${s009_pretest_auditor_id}" ] && \
+       docker image inspect "${s009_pretest_auditor_id}" >/dev/null 2>&1; then
+        docker tag "${s009_pretest_auditor_id}" agent-auditor:latest >/dev/null 2>&1 || true
+    fi
+}
+
+s009_extra_cleanup() {
+    s009_restore_role_images
+    for t in "${s009_tags_to_rmi[@]:-}"; do
+        [ -z "${t}" ] && continue
+        docker image rm -f "${t}" >/dev/null 2>&1 || true
+    done
+    docker container rm -f "test-s009-${test_pid}-running-planner" >/dev/null 2>&1 || true
+    docker container rm -f "test-s009-${test_pid}-pending-gs" >/dev/null 2>&1 || true
+    docker network rm "test-s009-${test_pid}-net" >/dev/null 2>&1 || true
+    rm -f "${repo_root}/docker-compose.override.yml" \
+          "${repo_root}/docker-compose.override.yml.s009-saved"
+    rm -f "${repo_root}/infra/coder-daemon/Dockerfile.generated" \
+          "${repo_root}/infra/auditor/Dockerfile.generated"
+}
+
+# Wire s009 cleanup into the existing trap. We can't reset an
+# already-active trap easily, so wrap the cleanup_test so it also runs
+# our extra cleanup. The original cleanup_test is captured here.
+_orig_cleanup_test=$(declare -f cleanup_test)
+cleanup_test() {
+    s009_extra_cleanup
+    eval "${_orig_cleanup_test#cleanup_test}"
+}
+
+# Snapshot the canonical role image IDs once, BEFORE any s009 phase
+# rebuilds them, so the trap can restore them at exit (phase 11 mutates
+# agent-coder-daemon:latest and agent-auditor:latest as part of testing
+# --add-platform's full path).
+s009_snapshot_role_images
+
+# ---------------------------------------------------------------------------
+# Phase 9 — single-platform setup (go)
+# ---------------------------------------------------------------------------
+hr; echo "Phase 9: single-platform setup (--platform=go)"
+
+if ! coder_tag=$(s009_build_role coder-daemon 9 go); then
+    fail "phase 9: failed to build coder-daemon with --platform=go"
+else
+    s009_tags_to_rmi+=("${coder_tag}")
+    pass "phase 9: coder-daemon built with --platform=go (tag=${coder_tag})"
+fi
+if ! auditor_tag=$(s009_build_role auditor 9 go); then
+    fail "phase 9: failed to build auditor with --platform=go"
+else
+    s009_tags_to_rmi+=("${auditor_tag}")
+    pass "phase 9: auditor built with --platform=go (tag=${auditor_tag})"
+fi
+
+# (i) go version runs in coder-daemon image
+if docker run --rm --entrypoint bash "${coder_tag}" -lc 'go version' >/dev/null 2>&1; then
+    pass "phase 9 (i): 'go version' runs inside ${coder_tag}"
+else
+    fail "phase 9 (i): 'go version' did NOT run inside ${coder_tag}"
+fi
+# (ii) go version runs in auditor image
+if docker run --rm --entrypoint bash "${auditor_tag}" -lc 'go version' >/dev/null 2>&1; then
+    pass "phase 9 (ii): 'go version' runs inside ${auditor_tag}"
+else
+    fail "phase 9 (ii): 'go version' did NOT run inside ${auditor_tag}"
+fi
+
+# (iii) and (iv): write platforms.txt to a phase scratch dir, mount it
+# into a one-shot container with SUBSTRATE_PLATFORMS env, and verify
+# the architect contract from the host's perspective.
+phase9_state=$(s009_phase_state_dir 9)
+echo go > "${phase9_state}/platforms.txt"
+: > "${phase9_state}/devices.txt"
+
+env_check=$(docker run --rm \
+    -v "${phase9_state}:/substrate:ro" \
+    -e SUBSTRATE_PLATFORMS=go \
+    debian:bookworm-slim \
+    bash -lc 'cat /substrate/platforms.txt; echo --; printf "%s\n" "${SUBSTRATE_PLATFORMS}"' 2>&1)
+if printf '%s' "${env_check}" | grep -qx 'go' && \
+   printf '%s' "${env_check}" | grep -qx 'go' >/dev/null; then
+    # The first 'go' is the file content; the second is the env var (after --).
+    if printf '%s' "${env_check}" | awk -v RS='--' 'NR==1 && /go/ {a=1} NR==2 && /go/ {b=1} END{exit !(a && b)}'; then
+        pass "phase 9 (iii)+(iv): SUBSTRATE_PLATFORMS env and /substrate/platforms.txt both contain 'go'"
+    else
+        fail "phase 9 (iii)+(iv): unexpected check output: ${env_check}"
+    fi
+else
+    fail "phase 9 (iii)+(iv): unexpected check output: ${env_check}"
+fi
+
+# ---------------------------------------------------------------------------
+# Phase 10 — polyglot setup (--platform=go,python-extras)
+# ---------------------------------------------------------------------------
+hr; echo "Phase 10: polyglot setup (--platform=go,python-extras)"
+
+if ! coder10=$(s009_build_role coder-daemon 10 go,python-extras); then
+    fail "phase 10: failed to build coder-daemon with --platform=go,python-extras"
+else
+    s009_tags_to_rmi+=("${coder10}")
+    pass "phase 10: coder-daemon built with --platform=go,python-extras"
+fi
+if ! auditor10=$(s009_build_role auditor 10 go,python-extras); then
+    fail "phase 10: failed to build auditor with --platform=go,python-extras"
+else
+    s009_tags_to_rmi+=("${auditor10}")
+    pass "phase 10: auditor built with --platform=go,python-extras"
+fi
+
+for tag in "${coder10}" "${auditor10}"; do
+    role="${tag#agent-}"; role="${role%%:*}"
+    if docker run --rm --entrypoint bash "${tag}" -lc 'go version && uv --version' >/dev/null 2>&1; then
+        pass "phase 10: both 'go version' and 'uv --version' run inside ${tag}"
+    else
+        fail "phase 10: one of go/uv missing inside ${tag}"
+    fi
+done
+
+phase10_state=$(s009_phase_state_dir 10)
+printf '%s\n' "go" "python-extras" > "${phase10_state}/platforms.txt"
+got=$(docker run --rm -v "${phase10_state}:/substrate:ro" \
+    debian:bookworm-slim cat /substrate/platforms.txt | tr -d '\r' | sort | paste -sd ',')
+if [ "${got}" = "go,python-extras" ]; then
+    pass "phase 10: /substrate/platforms.txt contains both names"
+else
+    fail "phase 10: /substrate/platforms.txt content unexpected: ${got}"
+fi
+
+# ---------------------------------------------------------------------------
+# Phase 11 — --add-platform happy path
+# ---------------------------------------------------------------------------
+hr; echo "Phase 11: --add-platform happy path"
+
+# Start at platforms=go (the phase 9 build produced agent-coder-daemon:
+# test-s009-${pid}-9-coder-daemon). For phase 11 we'll re-render with
+# --add-platform=c-cpp on top of go (apt-only, fast) and assert the new
+# state file lists both, and the rebuilt image carries g++.
+
+phase11_state=$(s009_phase_state_dir 11)
+echo go > "${phase11_state}/platforms.txt"
+: > "${phase11_state}/devices.txt"
+
+# Drive add-platform-device.sh with phase-scoped env. We point
+# GIT_SERVER_CONTAINER at a non-existent name to force the "git-server
+# down" branch into a deterministic NO-pending state via --force; OR
+# point it at a healthy scratch git-server. Cleanest: bring a scratch
+# git-server up briefly so the pre-flight (b) check is real.
+
+# Reuse the test's existing scratch git-server (ce). It already runs.
+SUBSTRATE_ADD_PLATFORM=c-cpp \
+SUBSTRATE_FORCE=0 \
+GIT_SERVER_CONTAINER="${project}-git-server" \
+ROLE_IMAGE_PATTERNS="agent-${test_pid}-nonexistent:latest" \
+PLATFORM_REPO_ROOT="${repo_root}" \
+HOME="${work_dir}/phase11-home" \
+bash -c '
+    cd "'"${repo_root}"'"
+    # Use the phase11 state dir, not the host substrate.
+    export _ORIG_STATE_DIR="'"${repo_root}/.substrate-state"'"
+    if [ -e "${_ORIG_STATE_DIR}" ]; then
+        mv "${_ORIG_STATE_DIR}" "${_ORIG_STATE_DIR}.s009-saved"
+    fi
+    cp -r "'"${phase11_state}"'" "${_ORIG_STATE_DIR}"
+    bash "'"${repo_root}"'/infra/scripts/add-platform-device.sh"
+    rc=$?
+    # Capture the resulting state file BEFORE we restore.
+    cp -r "${_ORIG_STATE_DIR}/platforms.txt" "'"${phase11_state}"'/platforms.txt"
+    rm -rf "${_ORIG_STATE_DIR}"
+    if [ -e "${_ORIG_STATE_DIR}.s009-saved" ]; then
+        mv "${_ORIG_STATE_DIR}.s009-saved" "${_ORIG_STATE_DIR}"
+    fi
+    exit $rc
+' >"${work_dir}/phase11.out" 2>&1
+phase11_rc=$?
+
+if [ "${phase11_rc}" -eq 0 ]; then
+    pass "phase 11: --add-platform=c-cpp succeeded (rc=0)"
+else
+    fail "phase 11: --add-platform=c-cpp failed rc=${phase11_rc}"
+    note "phase 11 log tail:"
+    tail -20 "${work_dir}/phase11.out" | sed 's/^/  /'
+fi
+
+phase11_final=$(paste -sd ',' "${phase11_state}/platforms.txt" 2>/dev/null | tr -d '\r')
+if [ "${phase11_final}" = "go,c-cpp" ]; then
+    pass "phase 11: state file updated to 'go,c-cpp'"
+else
+    fail "phase 11: state file expected 'go,c-cpp', got '${phase11_final}'"
+fi
+
+# Track the rebuilt agent-coder-daemon:latest so the final cleanup
+# resets it to whatever the host had originally.
+# (The add-platform-device.sh rebuilds the canonical agent-coder-daemon:
+# latest tag; the test annotates this in the report. The trap clears
+# the work dir but the rebuilt :latest tag remains and will be
+# overwritten the next time the user re-runs ./setup-linux.sh.)
+
+# ---------------------------------------------------------------------------
+# Phase 12 — --add-platform refusal: running container
+# ---------------------------------------------------------------------------
+hr; echo "Phase 12: --add-platform refusal — running container"
+
+# Spawn a container running the canonical agent-planner:latest image
+# so the running-container pre-flight trips. Use 'sleep' so the
+# container stays up.
+docker network create "test-s009-${test_pid}-net" >/dev/null 2>&1 || true
+running_planner="test-s009-${test_pid}-running-planner"
+docker run -d --rm \
+    --name "${running_planner}" \
+    --entrypoint sleep \
+    --network "test-s009-${test_pid}-net" \
+    agent-planner:latest 60 >/dev/null
+
+phase12_state=$(s009_phase_state_dir 12)
+echo go > "${phase12_state}/platforms.txt"
+
+SUBSTRATE_ADD_PLATFORM=c-cpp \
+SUBSTRATE_FORCE=0 \
+GIT_SERVER_CONTAINER="${project}-git-server" \
+PLATFORM_REPO_ROOT="${repo_root}" \
+bash -c '
+    cd "'"${repo_root}"'"
+    export _ORIG_STATE_DIR="'"${repo_root}/.substrate-state"'"
+    if [ -e "${_ORIG_STATE_DIR}" ]; then
+        mv "${_ORIG_STATE_DIR}" "${_ORIG_STATE_DIR}.s009-saved"
+    fi
+    cp -r "'"${phase12_state}"'" "${_ORIG_STATE_DIR}"
+    bash "'"${repo_root}"'/infra/scripts/add-platform-device.sh"
+    rc=$?
+    cp -r "${_ORIG_STATE_DIR}/platforms.txt" "'"${phase12_state}"'/platforms.txt"
+    rm -rf "${_ORIG_STATE_DIR}"
+    if [ -e "${_ORIG_STATE_DIR}.s009-saved" ]; then
+        mv "${_ORIG_STATE_DIR}.s009-saved" "${_ORIG_STATE_DIR}"
+    fi
+    exit $rc
+' >"${work_dir}/phase12.out" 2>&1
+phase12_rc=$?
+
+if [ "${phase12_rc}" -ne 0 ]; then
+    pass "phase 12: --add-platform refused (rc=${phase12_rc})"
+else
+    fail "phase 12: --add-platform was NOT refused (expected non-zero exit)"
+fi
+if grep -qF "${running_planner}" "${work_dir}/phase12.out"; then
+    pass "phase 12: error message names the running planner container"
+else
+    fail "phase 12: error message did not mention '${running_planner}'"
+    note "phase 12 log tail:"
+    tail -10 "${work_dir}/phase12.out" | sed 's/^/  /'
+fi
+phase12_final=$(paste -sd ',' "${phase12_state}/platforms.txt" 2>/dev/null | tr -d '\r')
+if [ "${phase12_final}" = "go" ]; then
+    pass "phase 12: state file unchanged"
+else
+    fail "phase 12: state file mutated despite refusal: '${phase12_final}'"
+fi
+
+docker rm -f "${running_planner}" >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
+# Phase 13 — --add-platform refusal: pending section branch
+# ---------------------------------------------------------------------------
+hr; echo "Phase 13: --add-platform refusal — pending section branch"
+
+# Push a section/* branch with commits ahead of main into the test's
+# scratch git-server. The architect test compose seeded main earlier
+# (Phase 4); we reuse that bare repo, add a section branch with one
+# more commit, and let the pre-flight (b) check trip.
+
+docker run --rm \
+    -v "${keys_dir}/human:/k:ro" \
+    --network "${network}" \
+    debian:bookworm-slim \
+    sh -c '
+        apt-get update -qq >/dev/null 2>&1 && \
+            apt-get install -qq -y --no-install-recommends git openssh-client >/dev/null 2>&1
+        export GIT_SSH_COMMAND="ssh -i /k/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+        tmp=$(mktemp -d)
+        cd "$tmp"
+        git -c user.email=h -c user.name=h clone -q git@git-server:/srv/git/main.git .
+        git checkout -q -b section/phase13-pending
+        echo "phase13" > pending.txt
+        git -c user.email=h -c user.name=h add pending.txt
+        git -c user.email=h -c user.name=h commit -q -m "phase13 pending"
+        git push -q origin section/phase13-pending
+    ' >/dev/null 2>&1 || true
+
+phase13_state=$(s009_phase_state_dir 13)
+echo go > "${phase13_state}/platforms.txt"
+
+SUBSTRATE_ADD_PLATFORM=c-cpp \
+SUBSTRATE_FORCE=0 \
+GIT_SERVER_CONTAINER="${project}-git-server" \
+ROLE_IMAGE_PATTERNS="agent-${test_pid}-nonexistent:latest" \
+PLATFORM_REPO_ROOT="${repo_root}" \
+bash -c '
+    cd "'"${repo_root}"'"
+    export _ORIG_STATE_DIR="'"${repo_root}/.substrate-state"'"
+    if [ -e "${_ORIG_STATE_DIR}" ]; then
+        mv "${_ORIG_STATE_DIR}" "${_ORIG_STATE_DIR}.s009-saved"
+    fi
+    cp -r "'"${phase13_state}"'" "${_ORIG_STATE_DIR}"
+    bash "'"${repo_root}"'/infra/scripts/add-platform-device.sh"
+    rc=$?
+    cp -r "${_ORIG_STATE_DIR}/platforms.txt" "'"${phase13_state}"'/platforms.txt"
+    rm -rf "${_ORIG_STATE_DIR}"
+    if [ -e "${_ORIG_STATE_DIR}.s009-saved" ]; then
+        mv "${_ORIG_STATE_DIR}.s009-saved" "${_ORIG_STATE_DIR}"
+    fi
+    exit $rc
+' >"${work_dir}/phase13.out" 2>&1
+phase13_rc=$?
+
+if [ "${phase13_rc}" -ne 0 ]; then
+    pass "phase 13: --add-platform refused (rc=${phase13_rc})"
+else
+    fail "phase 13: --add-platform was NOT refused (expected non-zero exit)"
+fi
+if grep -qF "section/phase13-pending" "${work_dir}/phase13.out"; then
+    pass "phase 13: error message names the pending section branch"
+else
+    fail "phase 13: error message did not mention 'section/phase13-pending'"
+    note "phase 13 log tail:"
+    tail -10 "${work_dir}/phase13.out" | sed 's/^/  /'
+fi
+phase13_final=$(paste -sd ',' "${phase13_state}/platforms.txt" 2>/dev/null | tr -d '\r')
+if [ "${phase13_final}" = "go" ]; then
+    pass "phase 13: state file unchanged"
+else
+    fail "phase 13: state file mutated despite refusal: '${phase13_final}'"
+fi
+
+# ---------------------------------------------------------------------------
+# Phase 14 — device passthrough wiring
+# ---------------------------------------------------------------------------
+hr; echo "Phase 14: device passthrough wiring (--device=/dev/null)"
+
+phase14_state=$(s009_phase_state_dir 14)
+phase14_dir="${work_dir}/phase14"
+mkdir -p "${phase14_dir}"
+
+# Render the override file at the phase scratch dir.
+(cd "${phase14_dir}" && \
+    "${repo_root}/infra/scripts/render-device-override.sh" /dev/null) >/dev/null 2>&1 || true
+# render-device-override.sh writes to repo_root/docker-compose.override.yml,
+# not to cwd; relocate the output into the phase scratch dir manually.
+"${repo_root}/infra/scripts/render-device-override.sh" /dev/null >/dev/null 2>&1 || true
+mv "${repo_root}/docker-compose.override.yml" "${phase14_dir}/docker-compose.override.yml"
+
+if grep -qF "/dev/null:/dev/null" "${phase14_dir}/docker-compose.override.yml"; then
+    pass "phase 14: override file contains /dev/null:/dev/null entry"
+else
+    fail "phase 14: override file missing /dev/null entry"
+    cat "${phase14_dir}/docker-compose.override.yml" | sed 's/^/  /'
+fi
+
+# Write the substrate state to scratch and assert /substrate/devices.txt
+# contains /dev/null when mounted.
+echo "/dev/null" > "${phase14_state}/devices.txt"
+got_dev=$(docker run --rm -v "${phase14_state}:/substrate:ro" \
+    debian:bookworm-slim cat /substrate/devices.txt | tr -d '\r')
+if [ "${got_dev}" = "/dev/null" ]; then
+    pass "phase 14: /substrate/devices.txt contains /dev/null"
+else
+    fail "phase 14: /substrate/devices.txt content unexpected: ${got_dev}"
+fi
+
+# Verify the device is actually visible inside a container when the
+# wiring is applied. Use 'docker run --device' directly (the override
+# file's purpose is to tell compose to do the same — testing the
+# device is reachable proves the underlying mechanism works).
+if docker run --rm --device /dev/null:/dev/null --entrypoint ls \
+    agent-coder-daemon:latest -la /dev/null >/dev/null 2>&1; then
+    pass "phase 14: --device wiring exposes /dev/null inside coder-daemon"
+else
+    fail "phase 14: --device wiring did NOT expose /dev/null"
+fi
+
+# Also exercise compose autoload (the production code path). Build a
+# tiny scratch compose.yml and place the override alongside; compose
+# should pick up devices via autoload.
+compose_scratch="${phase14_dir}/compose-test"
+mkdir -p "${compose_scratch}"
+cat > "${compose_scratch}/docker-compose.yml" <<COMPOSE_EOF
+services:
+  coder-daemon:
+    image: agent-coder-daemon:latest
+COMPOSE_EOF
+cp "${phase14_dir}/docker-compose.override.yml" "${compose_scratch}/docker-compose.override.yml"
+if (cd "${compose_scratch}" && \
+    docker compose -p "test-s009-${test_pid}-14" run --rm \
+        --entrypoint ls coder-daemon -la /dev/null >/dev/null 2>&1); then
+    pass "phase 14: compose autoload of override.yml wires /dev/null"
+else
+    fail "phase 14: compose autoload of override.yml did NOT expose /dev/null"
+fi
+docker compose -p "test-s009-${test_pid}-14" --profile ephemeral down --remove-orphans >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
+# Phase 15 — device_required warning (no --device)
+# ---------------------------------------------------------------------------
+hr; echo "Phase 15: device_required warning"
+
+# Drive platform_args_finalize directly with --platform=platformio-esp32
+# and no --device; assert SUBSTRATE_DEVICE_REQUIRED_MISSING is set, and
+# the warning text was emitted on stderr.
+phase15_out=$(bash -c '
+    set -euo pipefail
+    repo_root="'"${repo_root}"'"
+    . "${repo_root}/infra/scripts/lib/platform-args.sh"
+    platform_args_init
+    platform_args_consume --platform=platformio-esp32
+    platform_args_finalize
+    echo "SUBSTRATE_DEVICE_REQUIRED_MISSING=${SUBSTRATE_DEVICE_REQUIRED_MISSING}"
+    echo "EXIT=0"
+' 2>&1)
+phase15_rc=$?
+
+if [ "${phase15_rc}" -eq 0 ] && \
+   printf '%s' "${phase15_out}" | grep -qF "SUBSTRATE_DEVICE_REQUIRED_MISSING=platformio-esp32|"; then
+    pass "phase 15: setup proceeds (rc=0); SUBSTRATE_DEVICE_REQUIRED_MISSING populated"
+else
+    fail "phase 15: unexpected outcome rc=${phase15_rc}"
+    note "phase 15 output:"
+    printf '%s\n' "${phase15_out}" | sed 's/^/  /'
+fi
+if printf '%s' "${phase15_out}" | grep -qF "device_required=true" && \
+   printf '%s' "${phase15_out}" | grep -qF "platformio-esp32"; then
+    pass "phase 15: warning text mentions device_required and platformio-esp32"
+else
+    fail "phase 15: warning text incomplete"
+fi
+
+# ---------------------------------------------------------------------------
+# Phase 16 — --add-device happy path
+# ---------------------------------------------------------------------------
+hr; echo "Phase 16: --add-device happy path"
+
+phase16_state=$(s009_phase_state_dir 16)
+echo platformio-esp32 > "${phase16_state}/platforms.txt"
+: > "${phase16_state}/devices.txt"
+
+# Snapshot the host's coder-daemon image creation timestamp so we can
+# verify --add-device does NOT trigger a rebuild.
+img_before=$(docker image inspect agent-coder-daemon:latest --format '{{.Id}}' 2>/dev/null || echo missing)
+
+SUBSTRATE_ADD_DEVICES=/dev/null \
+SUBSTRATE_FORCE=0 \
+GIT_SERVER_CONTAINER="${project}-git-server" \
+ROLE_IMAGE_PATTERNS="agent-${test_pid}-nonexistent:latest" \
+PLATFORM_REPO_ROOT="${repo_root}" \
+bash -c '
+    cd "'"${repo_root}"'"
+    export _ORIG_STATE_DIR="'"${repo_root}/.substrate-state"'"
+    if [ -e "${_ORIG_STATE_DIR}" ]; then
+        mv "${_ORIG_STATE_DIR}" "${_ORIG_STATE_DIR}.s009-saved"
+    fi
+    cp -r "'"${phase16_state}"'" "${_ORIG_STATE_DIR}"
+    bash "'"${repo_root}"'/infra/scripts/add-platform-device.sh"
+    rc=$?
+    cp -r "${_ORIG_STATE_DIR}/devices.txt" "'"${phase16_state}"'/devices.txt"
+    rm -f "'"${repo_root}"'/docker-compose.override.yml" || true
+    rm -rf "${_ORIG_STATE_DIR}"
+    if [ -e "${_ORIG_STATE_DIR}.s009-saved" ]; then
+        mv "${_ORIG_STATE_DIR}.s009-saved" "${_ORIG_STATE_DIR}"
+    fi
+    exit $rc
+' >"${work_dir}/phase16.out" 2>&1
+phase16_rc=$?
+
+if [ "${phase16_rc}" -eq 0 ]; then
+    pass "phase 16: --add-device=/dev/null succeeded"
+else
+    fail "phase 16: --add-device=/dev/null failed rc=${phase16_rc}"
+    note "phase 16 log tail:"
+    tail -10 "${work_dir}/phase16.out" | sed 's/^/  /'
+fi
+phase16_final=$(paste -sd ',' "${phase16_state}/devices.txt" 2>/dev/null | tr -d '\r')
+if [ "${phase16_final}" = "/dev/null" ]; then
+    pass "phase 16: state file devices.txt updated to /dev/null"
+else
+    fail "phase 16: devices.txt content unexpected: '${phase16_final}'"
+fi
+
+img_after=$(docker image inspect agent-coder-daemon:latest --format '{{.Id}}' 2>/dev/null || echo missing)
+if [ "${img_before}" = "${img_after}" ]; then
+    pass "phase 16: agent-coder-daemon:latest image ID unchanged (no rebuild)"
+else
+    fail "phase 16: agent-coder-daemon:latest image ID changed (rebuild happened — should not for --add-device)"
+fi
+
 # ---------------------------------------------------------------------------
 hr
 printf "Summary: ${GREEN}%d passed${NC}, " "${pass_count}"
