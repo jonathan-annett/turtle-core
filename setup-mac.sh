@@ -24,16 +24,32 @@ fi
 #   --adopt-existing-substrate    One-shot migration: label this host's
 #                                 existing claude-state-architect volume
 #                                 and write a new .substrate-id sentinel.
+#   --platform=<name>[,...]       Build target platform(s) into the role
+#                                 images (s009).
+#   --device=<host-path>[,...]    Map host device(s) into the role
+#                                 containers (s009).
+#   --add-platform=<name>         Extend a running substrate's toolchain
+#                                 (s009).
+#   --add-device=<host-path>[,...]  Extend a running substrate's device
+#                                 passthrough list (s009).
+#   --force                       Skip --add-* pre-flight checks.
 # ---------------------------------------------------------------------------
+# shellcheck source=infra/scripts/lib/platform-args.sh
+. "${repo_root}/infra/scripts/lib/platform-args.sh"
+platform_args_init
+
 do_install_docker=0
 do_adopt=0
 for arg in "$@"; do
+    if platform_args_consume "${arg}"; then
+        continue
+    fi
     case "$arg" in
         --install-docker) do_install_docker=1 ;;
         --adopt-existing-substrate) do_adopt=1 ;;
         -h|--help)
             cat <<'EOF'
-Usage: ./setup-mac.sh [--install-docker | --adopt-existing-substrate]
+Usage: ./setup-mac.sh [flags...]
 
   --install-docker   Run install-docker.sh and exit. Use this once on a
                      fresh host to provision Colima + the Docker CLI
@@ -50,6 +66,10 @@ Usage: ./setup-mac.sh [--install-docker | --adopt-existing-substrate]
                      (it is briefly stopped during volume rotation, then
                      restarted as setup proceeds normally). Refuses if
                      .substrate-id already exists.
+
+EOF
+            platform_args_help_block
+            cat <<'EOF'
 
   Without flags, setup verifies your prerequisites and brings up the
   substrate. It does not install or remove anything system-wide.
@@ -69,6 +89,12 @@ fi
 
 if [ "${do_adopt}" -eq 1 ]; then
     export TURTLE_CORE_DO_ADOPT=1
+fi
+
+# --install-docker is bootstrap-only and exits before setup-common.sh is
+# sourced; finalize the platform args only when we'll actually run setup.
+if [ "${do_install_docker}" -eq 0 ]; then
+    platform_args_finalize
 fi
 
 # --install-docker is a bootstrap-only mode: provision Docker and exit.
