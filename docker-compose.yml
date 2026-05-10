@@ -40,13 +40,25 @@ services:
     depends_on:
       - git-server
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_API_KEY:    ${ANTHROPIC_API_KEY:-}
+      # s009: the platform plugin selection from substrate setup. Used
+      # by the architect to record platform invariants in SHARED-STATE.md.
+      # The state files at /substrate/{platforms,devices}.txt are the
+      # durable record; the env vars are a convenience for shells.
+      SUBSTRATE_PLATFORMS:  ${SUBSTRATE_PLATFORMS:-default}
+      SUBSTRATE_DEVICES:    ${SUBSTRATE_DEVICES:-}
     volumes:
       - architect-workspace:/work
       - architect-auditor-clone:/auditor
       - claude-state-architect:/home/agent/.claude
       - ./methodology:/methodology:ro
       - ./infra/keys/architect:/home/agent/.ssh:ro
+      # s009: substrate state — read-only mount of the host's
+      # .substrate-state/ directory (per-clone, gitignored). Setup
+      # writes platforms.txt and devices.txt; the architect-guide
+      # paragraph in §10 directs the architect to read these when
+      # initializing or updating SHARED-STATE.md.
+      - ./.substrate-state:/substrate:ro
     networks:
       - agent-net
     stdin_open: true
@@ -80,9 +92,14 @@ services:
 
   # ---------------------------------------------------------------------------
   # coder-daemon: ephemeral, paired with planner. HTTP commissioning service.
+  # Built from Dockerfile.generated, rendered at setup time by
+  # infra/scripts/render-dockerfile.sh from the role's static Dockerfile
+  # plus the selected platform plugin layer(s) (s009).
   # ---------------------------------------------------------------------------
   coder-daemon:
-    build: ./infra/coder-daemon
+    build:
+      context: ./infra/coder-daemon
+      dockerfile: Dockerfile.generated
     image: agent-coder-daemon:latest
     profiles: ["ephemeral"]
     environment:
@@ -99,9 +116,12 @@ services:
 
   # ---------------------------------------------------------------------------
   # auditor: ephemeral, per audit. Started by audit.sh.
+  # Built from Dockerfile.generated (s009; see coder-daemon comment).
   # ---------------------------------------------------------------------------
   auditor:
-    build: ./infra/auditor
+    build:
+      context: ./infra/auditor
+      dockerfile: Dockerfile.generated
     image: agent-auditor:latest
     profiles: ["ephemeral"]
     environment:

@@ -19,16 +19,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ----------------------------------------------------------------------------
-# Project build toolchain — extend HERE for downstream projects.
-# Examples:
-#   RUN apt-get update && apt-get install -y --no-install-recommends rustc cargo
-#   RUN apt-get update && apt-get install -y --no-install-recommends golang-go
-#   RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-# The proof-of-concept (timestamps CLI) needs only node + tsc, which are
-# covered by the base nodejs/npm above.
+# Project build toolchain. The line below is the sentinel consumed by
+# infra/scripts/render-dockerfile.sh — the renderer composes the
+# selected platform plugin layers (methodology/platforms/<name>.yaml)
+# in place of this comment when producing Dockerfile.generated. With
+# --platform=default (or no flag) the sentinel is simply removed and
+# the file is byte-equivalent to this template aside from a generated-
+# file header.
 # ----------------------------------------------------------------------------
+# PLATFORM_INSERT_HERE
 
-# Daemon working dir.
+# Daemon working dir. USER root is re-asserted explicitly so the file is
+# robust regardless of what the renderer emitted above (a platform block
+# always ends in USER agent, by contract — see render-dockerfile.sh).
+USER root
 RUN mkdir -p /daemon /data && chown -R agent:agent /daemon /data
 
 USER agent

@@ -1,0 +1,12 @@
+# Platform: default
+#
+# The implicit platform when --platform is not supplied to setup. Adds
+# nothing to the role images — coder-daemon and auditor are built from
+# their static templates exactly as they were before s009. Defining it
+# explicitly lets `--platform=default` validate (and lets `default` be
+# combined harmlessly with other platforms, e.g. --platform=default,go).
+#
+# Schema reference: methodology/platforms/README.md
+name: default
+description: Baseline; no toolchain layers added. Equivalent to no --platform flag.
+roles: {}

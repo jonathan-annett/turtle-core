@@ -1,0 +1,40 @@
+# Platform: node-extras
+#
+# Adds pnpm, yarn, and typescript as global npm packages installed under
+# /home/agent/.npm-global (so the agent user can write them) and PATHs
+# the bin directory.
+#
+# Coder-daemon already has nodejs and npm baked into its static layer;
+# auditor does not, so we install them via apt for the auditor role.
+#
+# Schema reference: methodology/platforms/README.md
+name: node-extras
+description: Node with pnpm, yarn, typescript as user-scope globals (~50MB).
+roles:
+  coder-daemon:
+    install:
+      - "mkdir -p /home/agent/.npm-global"
+      - "npm config set prefix /home/agent/.npm-global"
+      - "npm install -g --no-fund --no-audit pnpm yarn typescript"
+    env:
+      PATH: "/home/agent/.npm-global/bin:${PATH}"
+    verify:
+      - "pnpm --version"
+      - "yarn --version"
+      - "tsc --version"
+  auditor:
+    apt: [nodejs, npm]
+    install:
+      - "mkdir -p /home/agent/.npm-global"
+      - "npm config set prefix /home/agent/.npm-global"
+      - "npm install -g --no-fund --no-audit pnpm yarn typescript"
+    env:
+      PATH: "/home/agent/.npm-global/bin:${PATH}"
+    verify:
+      - "pnpm --version"
+      - "yarn --version"
+      - "tsc --version"
+defaults:
+  test_runner: "pnpm test"
+  build_command: "pnpm build"
+  allowed_tools: [Bash, Read, Write, Edit]

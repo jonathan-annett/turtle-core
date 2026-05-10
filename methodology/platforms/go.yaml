@@ -1,0 +1,23 @@
+# Platform: go
+#
+# Adds the apt-packaged Go toolchain (golang-go) to coder-daemon and
+# auditor. Debian bookworm ships Go 1.19 in the default repo; for
+# projects that need a newer Go, override this YAML or write a sibling
+# (e.g. go-1.22.yaml) using a curl-script install instead.
+#
+# Schema reference: methodology/platforms/README.md
+name: go
+description: Go toolchain via Debian apt (golang-go).
+roles:
+  coder-daemon:
+    apt: [golang-go]
+    verify:
+      - "go version"
+  auditor:
+    apt: [golang-go]
+    verify:
+      - "go version"
+defaults:
+  test_runner: "go test ./..."
+  build_command: "go build ./..."
+  allowed_tools: [Bash, Read, Write, Edit]

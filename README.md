@@ -156,10 +156,15 @@ git clone <wherever-this-template-lives> myproject
 cd myproject
 
 # Linux / Crostini:
-./setup-linux.sh
+./setup-linux.sh                                 # default (no language toolchain)
+./setup-linux.sh --platform=go                   # adds Go to coder-daemon + auditor
+./setup-linux.sh --platform=python-extras,c-cpp  # polyglot
+./setup-linux.sh --platform=platformio-esp32 --device=/dev/ttyUSB0
+                                                 # embedded; pass an ESP32 board through
 
 # macOS:
 ./setup-mac.sh
+./setup-mac.sh --platform=rust
 
 # Verify everything came up healthy:
 ./verify.sh
@@ -168,6 +173,19 @@ cd myproject
 ./attach-architect.sh
 # Inside: `claude` (or `claude --resume` to resume your session).
 ```
+
+The `--platform=<name>` flag selects one or more target platforms (Go,
+Rust, Python tooling, C/C++, Node-extras, PlatformIO/ESP32, or
+`default`). Repeated flags concatenate. Without it, the role images
+ship with no language toolchain and behave as they did before s009.
+Available platforms live under `methodology/platforms/`; the schema
+and the catalog are documented in
+`methodology/platforms/README.md`. For embedded targets that need
+hardware-in-the-loop testing (ESP32 over UART), supply
+`--device=<host-path>` so the device is wired into the role
+containers. See `methodology/deployment-docker.md §10` for the full
+operator workflow including `--add-platform` / `--add-device` on
+running substrates.
 
 From there you and the architect produce `TOP-LEVEL-PLAN.md`, draft the
 first section brief, commit it, and exit. Then:

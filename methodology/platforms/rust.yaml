@@ -1,0 +1,32 @@
+# Platform: rust
+#
+# Installs the Rust toolchain via the official rustup curl-script,
+# minimal profile, stable channel. Image-time install runs as the
+# unprivileged 'agent' user, which is what rustup expects (it puts
+# everything under ~/.cargo and ~/.rustup). PATH is extended so
+# subsequent layers (and the runtime shell) see cargo / rustc / rustup.
+#
+# Schema reference: methodology/platforms/README.md
+name: rust
+description: Rust stable toolchain via rustup (minimal profile, ~400MB).
+roles:
+  coder-daemon:
+    install:
+      - 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path'
+    env:
+      PATH: "/home/agent/.cargo/bin:${PATH}"
+    verify:
+      - "rustc --version"
+      - "cargo --version"
+  auditor:
+    install:
+      - 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path'
+    env:
+      PATH: "/home/agent/.cargo/bin:${PATH}"
+    verify:
+      - "rustc --version"
+      - "cargo --version"
+defaults:
+  test_runner: "cargo test"
+  build_command: "cargo build"
+  allowed_tools: [Bash, Read, Write, Edit]
