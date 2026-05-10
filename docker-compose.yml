@@ -100,6 +100,11 @@ services:
       - claude-state-shared:/home/agent/.claude
       - ./methodology:/methodology:ro
       - ./infra/keys/planner:/home/agent/.ssh:ro
+      # s011 11.e: shared "Required tool surface" parser, bash port of
+      # infra/coder-daemon/parse-tool-surface.js. The entrypoint calls
+      # this at non-interactive bootstrap to translate the section
+      # brief's field into --allowed-tools.
+      - ./infra/scripts/lib/parse-tool-surface.sh:/usr/local/lib/turtle-core/parse-tool-surface.sh:ro
     networks:
       - agent-net
     stdin_open: true

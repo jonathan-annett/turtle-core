@@ -99,13 +99,20 @@ if [ -n "${section}" ]; then
     # Argument mode: build the deterministic bootstrap prompt and pass it
     # via env to the planner. The planner entrypoint (s008 8.d) detects
     # BOOTSTRAP_PROMPT and invokes claude non-interactively.
+    #
+    # s011 11.e: BRIEF_PATH is passed alongside BOOTSTRAP_PROMPT so the
+    # entrypoint can read the brief's "Required tool surface" field and
+    # translate it into --allowed-tools. The path is absolute inside the
+    # container (the planner mounts main.git's working clone at /work).
     bootstrap_prompt="Read /work/${brief_path} and execute the section per the methodology in /methodology/planner-guide.md (which is symlinked as /work/CLAUDE.md). The coder daemon is at http://coder-daemon:${port}. Your bearer token is in \$COMMISSION_TOKEN. Discharge when the section is done."
 
     echo "Commissioning planner against ${brief_path}"
     echo "Starting planner (foreground)..."
     BOOTSTRAP_PROMPT="${bootstrap_prompt}" \
+    BRIEF_PATH="/work/${brief_path}" \
         docker compose -p "${project}" --env-file "${env_file}" --profile ephemeral run --rm \
             -e BOOTSTRAP_PROMPT \
+            -e BRIEF_PATH \
             planner
 else
     # Shell-only mode: legacy path. Print the summary block so the human
