@@ -778,20 +778,32 @@ s009_tags_to_rmi=()
 # (no rebuild required — image IDs survive the rebuild as untagged).
 s009_pretest_coder_id=""
 s009_pretest_auditor_id=""
+# BuildKit may prune the previous image when re-tagging via 'docker
+# compose build', so a bare image-ID snapshot doesn't survive phase 11's
+# rebuild. Snapshot via a stable tag instead — the tag holds the image
+# alive as long as it exists, regardless of what happens to :latest.
+s009_pretest_coder_tag="agent-coder-daemon:s009-pretest-${test_pid}"
+s009_pretest_auditor_tag="agent-auditor:s009-pretest-${test_pid}"
 s009_snapshot_role_images() {
-    s009_pretest_coder_id=$(docker image inspect agent-coder-daemon:latest \
-        --format '{{.Id}}' 2>/dev/null || true)
-    s009_pretest_auditor_id=$(docker image inspect agent-auditor:latest \
-        --format '{{.Id}}' 2>/dev/null || true)
+    if docker image inspect agent-coder-daemon:latest >/dev/null 2>&1; then
+        docker tag agent-coder-daemon:latest "${s009_pretest_coder_tag}" >/dev/null 2>&1 || true
+        s009_pretest_coder_id=$(docker image inspect "${s009_pretest_coder_tag}" \
+            --format '{{.Id}}' 2>/dev/null || true)
+    fi
+    if docker image inspect agent-auditor:latest >/dev/null 2>&1; then
+        docker tag agent-auditor:latest "${s009_pretest_auditor_tag}" >/dev/null 2>&1 || true
+        s009_pretest_auditor_id=$(docker image inspect "${s009_pretest_auditor_tag}" \
+            --format '{{.Id}}' 2>/dev/null || true)
+    fi
 }
 s009_restore_role_images() {
-    if [ -n "${s009_pretest_coder_id}" ] && \
-       docker image inspect "${s009_pretest_coder_id}" >/dev/null 2>&1; then
-        docker tag "${s009_pretest_coder_id}" agent-coder-daemon:latest >/dev/null 2>&1 || true
+    if docker image inspect "${s009_pretest_coder_tag}" >/dev/null 2>&1; then
+        docker tag "${s009_pretest_coder_tag}" agent-coder-daemon:latest >/dev/null 2>&1 || true
+        docker image rm "${s009_pretest_coder_tag}" >/dev/null 2>&1 || true
     fi
-    if [ -n "${s009_pretest_auditor_id}" ] && \
-       docker image inspect "${s009_pretest_auditor_id}" >/dev/null 2>&1; then
-        docker tag "${s009_pretest_auditor_id}" agent-auditor:latest >/dev/null 2>&1 || true
+    if docker image inspect "${s009_pretest_auditor_tag}" >/dev/null 2>&1; then
+        docker tag "${s009_pretest_auditor_tag}" agent-auditor:latest >/dev/null 2>&1 || true
+        docker image rm "${s009_pretest_auditor_tag}" >/dev/null 2>&1 || true
     fi
 }
 
@@ -810,13 +822,12 @@ s009_extra_cleanup() {
           "${repo_root}/infra/auditor/Dockerfile.generated"
 }
 
-# Wire s009 cleanup into the existing trap. We can't reset an
-# already-active trap easily, so wrap the cleanup_test so it also runs
-# our extra cleanup. The original cleanup_test is captured here.
-_orig_cleanup_test=$(declare -f cleanup_test)
+# Wire s009 cleanup into the existing trap. The original cleanup_test
+# is renamed to _s007_cleanup_test so we can call it from the wrapper.
+eval "_s007_cleanup_test() $(declare -f cleanup_test | sed -n '/^{/,$p')"
 cleanup_test() {
     s009_extra_cleanup
-    eval "${_orig_cleanup_test#cleanup_test}"
+    _s007_cleanup_test
 }
 
 # Snapshot the canonical role image IDs once, BEFORE any s009 phase
@@ -844,13 +855,13 @@ else
 fi
 
 # (i) go version runs in coder-daemon image
-if docker run --rm --entrypoint bash "${coder_tag}" -lc 'go version' >/dev/null 2>&1; then
+if docker run --rm --entrypoint bash "${coder_tag}" -c 'go version' >/dev/null 2>&1; then
     pass "phase 9 (i): 'go version' runs inside ${coder_tag}"
 else
     fail "phase 9 (i): 'go version' did NOT run inside ${coder_tag}"
 fi
 # (ii) go version runs in auditor image
-if docker run --rm --entrypoint bash "${auditor_tag}" -lc 'go version' >/dev/null 2>&1; then
+if docker run --rm --entrypoint bash "${auditor_tag}" -c 'go version' >/dev/null 2>&1; then
     pass "phase 9 (ii): 'go version' runs inside ${auditor_tag}"
 else
     fail "phase 9 (ii): 'go version' did NOT run inside ${auditor_tag}"
@@ -900,10 +911,13 @@ fi
 
 for tag in "${coder10}" "${auditor10}"; do
     role="${tag#agent-}"; role="${role%%:*}"
-    if docker run --rm --entrypoint bash "${tag}" -lc 'go version && uv --version' >/dev/null 2>&1; then
+    if docker run --rm --entrypoint bash "${tag}" -c 'go version && uv --version' >/dev/null 2>&1; then
         pass "phase 10: both 'go version' and 'uv --version' run inside ${tag}"
     else
         fail "phase 10: one of go/uv missing inside ${tag}"
+        # Diagnostic: show which one failed.
+        docker run --rm --entrypoint bash "${tag}" -c 'echo PATH=$PATH; go version 2>&1; uv --version 2>&1' \
+            2>&1 | sed 's/^/  /' | head -5
     fi
 done
 
@@ -1172,10 +1186,15 @@ fi
 # should pick up devices via autoload.
 compose_scratch="${phase14_dir}/compose-test"
 mkdir -p "${compose_scratch}"
+# The production override.yml extends both coder-daemon and auditor;
+# the scratch base must declare both services or compose's merge will
+# error on the missing image/build context for the role we don't use.
 cat > "${compose_scratch}/docker-compose.yml" <<COMPOSE_EOF
 services:
   coder-daemon:
     image: agent-coder-daemon:latest
+  auditor:
+    image: agent-auditor:latest
 COMPOSE_EOF
 cp "${phase14_dir}/docker-compose.override.yml" "${compose_scratch}/docker-compose.override.yml"
 if (cd "${compose_scratch}" && \
