@@ -40,13 +40,25 @@ services:
     depends_on:
       - git-server
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_API_KEY:    ${ANTHROPIC_API_KEY:-}
+      # s009: the platform plugin selection from substrate setup. Used
+      # by the architect to record platform invariants in SHARED-STATE.md.
+      # The state files at /substrate/{platforms,devices}.txt are the
+      # durable record; the env vars are a convenience for shells.
+      SUBSTRATE_PLATFORMS:  ${SUBSTRATE_PLATFORMS:-default}
+      SUBSTRATE_DEVICES:    ${SUBSTRATE_DEVICES:-}
     volumes:
       - architect-workspace:/work
       - architect-auditor-clone:/auditor
       - claude-state-architect:/home/agent/.claude
       - ./methodology:/methodology:ro
       - ./infra/keys/architect:/home/agent/.ssh:ro
+      # s009: substrate state — read-only mount of the host's
+      # .substrate-state/ directory (per-clone, gitignored). Setup
+      # writes platforms.txt and devices.txt; the architect-guide
+      # paragraph in §10 directs the architect to read these when
+      # initializing or updating SHARED-STATE.md.
+      - ./.substrate-state:/substrate:ro
     networks:
       - agent-net
     stdin_open: true

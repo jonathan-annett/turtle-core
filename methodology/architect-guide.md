@@ -121,6 +121,10 @@ This is your durable working memory. Anything future sections will need to know 
 
 Treat it as the artifact that makes you rehydratable. If your context degrades and the human starts a fresh architect session, this document plus `TOP-LEVEL-PLAN.md` should be enough to resume without losing the project.
 
+### Substrate platform invariants
+
+When initializing or updating `SHARED-STATE.md`, read `/substrate/platforms.txt` and `/substrate/devices.txt`. Each line in `platforms.txt` is the name of a target platform configured at substrate setup; record each as a project-wide decision in `SHARED-STATE.md` under the heading **Target platform** (single) or **Target platforms** (multiple, polyglot mode). Each line in `devices.txt` is a host device path that has been mapped through to the role containers; record these under **Hardware-in-the-loop devices** if any platform's testing depends on them. If `/substrate/platforms.txt` is absent, the substrate is on `default` only (no platform plugin configured). The `SUBSTRATE_PLATFORMS` and `SUBSTRATE_DEVICES` environment variables carry the same information for shell scripts; the files are the canonical record.
+
 ## Discipline
 
 - Briefs are your primary system-mutating output. Make them precise.

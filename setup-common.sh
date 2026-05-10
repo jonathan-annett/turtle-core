@@ -198,6 +198,39 @@ if [ "${#verify_failed[@]}" -gt 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 5.7 s009: write substrate state files (platforms.txt, devices.txt) into
+#     .substrate-state/ at the repo root. The architect's compose mount
+#     surfaces the directory at /substrate (read-only). Writing BEFORE
+#     architect comes up means the architect sees populated files on
+#     first start; writing on every setup re-run keeps them current.
+#
+#     Path note: the s009 brief specifies /var/turtle-core-state/ as the
+#     host location. We use .substrate-state/ in the repo root instead,
+#     for consistency with the existing .substrate-id sentinel and
+#     infra/keys/* convention (the substrate is repo-local everywhere
+#     else; /var/ would be the only artefact requiring root for first
+#     mkdir). Section report records the deviation.
+# ---------------------------------------------------------------------------
+state_dir="${repo_root}/.substrate-state"
+mkdir -p "${state_dir}"
+chmod 0755 "${state_dir}"
+{
+    for p in ${SUBSTRATE_PLATFORMS//,/ }; do
+        [ -z "${p}" ] && continue
+        echo "${p}"
+    done
+} > "${state_dir}/platforms.txt"
+{
+    if [ -n "${SUBSTRATE_DEVICES}" ]; then
+        for d in ${SUBSTRATE_DEVICES//,/ }; do
+            [ -z "${d}" ] && continue
+            echo "${d}"
+        done
+    fi
+} > "${state_dir}/devices.txt"
+log "Wrote substrate state to ${state_dir}/{platforms,devices}.txt"
+
+# ---------------------------------------------------------------------------
 # 6. Bring up the long-lived services.
 # ---------------------------------------------------------------------------
 log "Starting long-lived services (git-server, architect)..."
