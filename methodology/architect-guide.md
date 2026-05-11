@@ -2,7 +2,7 @@
 
 A lean view for the persistent agent paired with the human. This guide includes only what the architect needs to do its job. The internal mechanics of how planners decompose sections, how coders execute tasks, and how auditors design probes are deliberately omitted — that is noise to the architect's context window.
 
-This guide is a derivative of the canonical methodology spec (v2.1). When the spec changes, regenerate this view from it. Do not hand-edit.
+This guide is a derivative of the canonical methodology spec (v2.2). When the spec changes, regenerate this view from it. Do not hand-edit.
 
 ---
 
@@ -47,6 +47,7 @@ Path: `/briefs/sNNN-slug/section.brief.md`. You commit this to `main` directly.
 - **Definition of done.** Concrete and checkable. Not "auth works" but "user can sign up, sign in, sign out; sessions persist across reload; passwords hashed with chosen algorithm; rate-limited at N attempts per minute."
 - **Out of scope.** Explicit non-goals. Saves you from scope creep and the planner from asking.
 - **Repo coordinates.** Base branch (`main`), section branch name to create.
+- **Required tool surface.** An explicit list of Claude Code tools and tool-scoped patterns the planner is permitted to use during the section. The substrate parses this field at commission time and translates it into the planner's `--allowedTools`. **Mandatory.** A missing or unparseable field fails the commission cleanly with an actionable error; the substrate does not default to a permissive list, and it does not silently deny — both are silent-failure modes you want to avoid. See **Authoring the tool-surface field** below for the format and concrete examples.
 - **Reporting requirements.** What the section report must contain.
 
 ## What you should expect in a section report
@@ -69,7 +70,49 @@ Path: `/briefs/sNNN-slug/audit.brief.md`. You commit this to `main` directly.
 - Reference to the section report and section branch tip — what was reportedly built.
 - **Specific concerns to investigate.** Be aggressive here. "Look for X." "Verify Y cannot happen." Adversarial framing is what makes the audit useful.
 - **Sign-off criteria.** Explicit, binary pass/fail conditions. Not "the auth is secure" but "no credentials in logs; rate limiting verified by load test; password reset cannot be triggered for arbitrary accounts."
+- **Required tool surface.** Same field as in the section brief, scoped for the auditor. The substrate parses it and translates into the auditor's `--allowedTools`. Mandatory; fail-clean on absence. See **Authoring the tool-surface field** below — audit briefs often need different tools from section briefs (read-only main-repo inspection, plus whatever verification tooling the audit requires).
 - Auditor repo coordinates: where in the auditor repo the audit report should land.
+
+## Authoring the tool-surface field
+
+The "Required tool surface" field appears in section briefs (§7.2 of the spec) and audit briefs (§7.6) with the same shape as the task-brief field planners author for coders (§7.3). Format: a fenced YAML or JSON list following a bullet (`- **Required tool surface.**`) or a `## Required tool surface` heading. The parser accepts either form; lang tag on the fence is informational.
+
+YAML form (preferred — easiest to diff):
+
+````markdown
+- **Required tool surface.**
+  ```yaml
+  - Read
+  - Edit
+  - Write
+  - Bash(git checkout:*)
+  - Bash(git branch:*)
+  - Bash(git commit:*)
+  - Bash(git push:*)
+  - Bash(git merge:*)
+  - Bash(git status:*)
+  - Bash(git log:*)
+  - Bash(curl:*)
+  ```
+````
+
+JSON form (equivalent):
+
+````markdown
+### Required tool surface
+```json
+["Read", "Edit", "Write", "Bash(git checkout:*)", "Bash(curl:*)"]
+```
+````
+
+Concrete patterns by section shape:
+
+- **Pure code section, no remote work.** Planner needs git-only Bash plus the commission-loop commands. Typical: `Read`, `Edit`, `Write`, `Bash(git *:*)` patterns, `Bash(curl:*)`, `Bash(cat:*)`, `Bash(ls:*)`.
+- **Section involving remote-host SSH (s010 substrates).** Add `Bash(ssh <remote-name>:*)` for each registered remote host the section touches, and `Bash(scp:*)` if file transfers are part of the work.
+- **HIL section involving device passthrough.** Same as above plus whatever flash/serial tooling the platform plugin exposes (e.g. `Bash(pio test:*)`, `Bash(pio run:*)`).
+- **Audit brief, read-only.** Auditor needs `Read` over the main-repo checkout and methodology, `Edit` and `Write` scoped to the auditor repo for the report and any private tooling, `Bash(git log:*)` and `Bash(git diff:*)` for read-only inspection, plus the audit's verification commands (test runners, static analysers, HIL access). The auditor's main-repo clone is mounted read-only at the volume level, so even a `Bash(git commit:*)` allowance there cannot reach `main` — but keep the audit brief's tool surface tight regardless; it is also a documentation of audit scope.
+
+Be **precise**. Daemon-level denial is silent for the recipient — the planner/auditor sees a tool call rejected and may not understand why. Tighter than necessary is recoverable (you re-author the brief with the extra pattern, the human re-commissions); looser than necessary is a quiet security/correctness hazard.
 
 ## What you should expect in an audit report
 

@@ -2,6 +2,8 @@
 
 A generic, project-agnostic methodology for executing software projects with AI agents. One human and one persistent overseer agent share full context; everything else is an ephemeral specialist commissioned for one job.
 
+**Version 2.2.** Tool-surface mechanism extended symmetrically up the role hierarchy: section briefs (architect → planner) and audit briefs (architect → auditor) now carry a "Required tool surface" field with the same shape and semantics as the task-brief field already specified in §7.3. The substrate translates each brief's field into the receiving role's `--allowedTools` at commission time; absent or unparseable → fail clean. See §7.2, §7.6, §9.
+
 **Version 2.1.** Substrate model revised: when all agents run on a shared host (typical for VPS, local-server, or laptop deployments), the methodology uses a single git substrate with role-isolated boundaries, and the Drive layer is dropped. Three deployment variants (Docker, linux users, cloud-Drive legacy) are described in §3.4–§3.6, satisfying the per-role access table in §3.3.
 
 ---
@@ -257,6 +259,7 @@ Path: `/briefs/sNNN-slug/section.brief.md`. Architect commits.
 - **Definition of done.** Concrete, checkable criteria.
 - **Out of scope.** Explicit non-goals.
 - **Repo coordinates.** Base branch (`main`), section branch name to create.
+- **Required tool surface.** An explicit list of Claude Code tools and tool-scoped patterns the planner is permitted to use during this section — typically `Read`, `Edit`, and `Write` for authoring task briefs and the section report, plus `Bash` with patterns for the git operations the planner needs (`Bash(git checkout:*)`, `Bash(git branch:*)`, `Bash(git commit:*)`, `Bash(git push:*)`, `Bash(git merge:*)`), plus any commission-loop commands the planner uses (e.g. `Bash(curl:*)` for daemon HTTP calls). Same shape and semantics as the task-brief field in §7.3. The substrate translates this list into the planner's `--allowedTools` at commission time; if the field is absent or unparseable, the planner entrypoint fails clean with an actionable error rather than silently denying or defaulting permissive.
 - **Reporting requirements.** What the section report must contain.
 
 ### 7.3 Task brief (planner → coder)
@@ -266,7 +269,7 @@ Path: `/briefs/sNNN-slug/tNNN-slug.brief.md`. Planner commits to section branch.
 - **Objective.** Single specific task.
 - **Required context.** Files, interfaces, prior decisions, links to relevant section state. Be exhaustive — assume the coder knows nothing project-specific.
 - **Touch surface.** Which files/modules may be modified; which must not be.
-- **Required tool surface.** An explicit list of Claude Code tools and tool-scoped patterns the coder is permitted to use for this task — e.g. `Read`, `Edit`, `Write` scoped to the touch surface, `Bash` with an allowlist of command patterns (`git *`, project test/build commands). The substrate translates this list into the coder's `--allowedTools` at commission time.
+- **Required tool surface.** An explicit list of Claude Code tools and tool-scoped patterns the coder is permitted to use for this task — e.g. `Read`, `Edit`, `Write` scoped to the touch surface, `Bash` with an allowlist of command patterns (`git *`, project test/build commands). The substrate translates this list into the coder's `--allowedTools` at commission time. (The same field shape is required at the section-brief and audit-brief level for the planner and auditor; see §7.2 and §7.6.)
 - **Constraints.** Inherited from section brief plus task-specific ones.
 - **Verification.** Tests to write or run; checks to perform.
 - **Branch coordinates.** Section branch to base from; task branch name to create.
@@ -298,6 +301,7 @@ Path: `/briefs/sNNN-slug/audit.brief.md`. Architect commits to `main` (coordinat
 - **What was reportedly built.** Reference to the section report and to the section branch tip.
 - **Specific concerns to investigate.** Adversarial prompts: "look for X", "verify Y cannot happen". The architect should be aggressive here.
 - **Sign-off criteria.** Explicit, binary pass/fail conditions.
+- **Required tool surface.** An explicit list of Claude Code tools and tool-scoped patterns the auditor is permitted to use during the audit — typically `Read` over the section-branch checkout and methodology docs, `Edit` and `Write` scoped to the auditor repo for the audit report and any private tooling, `Bash` with patterns for read-only inspection of `/work` (e.g. `Bash(git log:*)`, `Bash(git diff:*)`) and for the verification commands the audit requires (test runners, build commands, static analysers, HIL access via `Bash(ssh <remote-host>:*)` where the project has registered remote hosts). Audit briefs may legitimately need different surfaces from section briefs. Same shape and semantics as the task-brief field in §7.3. The substrate translates this list into the auditor's `--allowedTools` at commission time; if the field is absent or unparseable, the auditor entrypoint fails clean with an actionable error.
 - **Auditor repo coordinates.** Where the audit report should land in the auditor repo.
 
 ### 7.7 Audit report (auditor → architect + human)
@@ -350,11 +354,11 @@ Every commissioning event has the same shape:
 
 > "Here is a filepath. Read it. Do what it says. Discharge when done."
 
-- **Planner commissioning:** human starts a terminal-based agent in the planner role (per the deployment variant — a fresh Docker container via `docker compose run --rm planner`, a shell as the `planner` linux user, etc.) and supplies the filepath of the section brief in the main repo working tree. The brief itself contains all repo coordinates, branch names, and reporting destinations.
-- **Coder commissioning:** the planner points a fresh agent in the coder role at the section branch and the task brief path. The task brief contains all coordinates.
-- **Auditor commissioning:** human starts a fresh terminal agent in the auditor role and supplies the filepath of the audit brief. The brief contains coordinates for the main repo (read), the auditor repo (write), and the report destination.
+- **Planner commissioning:** human starts a terminal-based agent in the planner role (per the deployment variant — a fresh Docker container via `docker compose run --rm planner`, a shell as the `planner` linux user, etc.) and supplies the filepath of the section brief in the main repo working tree. The brief itself contains all repo coordinates, branch names, and reporting destinations. The substrate parses the brief's "Required tool surface" field (§7.2) and translates it into the planner's `--allowedTools` at startup; a missing or unparseable field fails the commission cleanly.
+- **Coder commissioning:** the planner points a fresh agent in the coder role at the section branch and the task brief path. The task brief contains all coordinates. The substrate parses the brief's "Required tool surface" field (§7.3) and translates it into the coder's `--allowedTools`; a missing or unparseable field fails the commission cleanly.
+- **Auditor commissioning:** human starts a fresh terminal agent in the auditor role and supplies the filepath of the audit brief. The brief contains coordinates for the main repo (read), the auditor repo (write), and the report destination. The substrate parses the brief's "Required tool surface" field (§7.6) and translates it into the auditor's `--allowedTools`; a missing or unparseable field fails the commission cleanly.
 
-Briefs are **self-bootstrapping**: receiving the filepath should be enough for the agent to read its instructions and proceed without further conversational setup.
+Briefs are **self-bootstrapping**: receiving the filepath should be enough for the agent to read its instructions and proceed without further conversational setup. The tool-surface translation is uniform across all three role-pair handoffs (architect→planner, planner→coder, architect→auditor) — the field shape is identical, the parser is shared, and the failure mode is the same.
 
 ---
 

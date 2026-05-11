@@ -29,7 +29,13 @@ roles:
       PATH: "/home/agent/.platformio-venv/bin:${PATH}"
     verify:
       - "pio --version"
-      - "pio platform show espressif32 | head -1"
+      # s011 11.g (F44): the prior form `pio platform show espressif32 | head -1`
+      # races against pipefail — `head -1` closes its stdin after the first
+      # line, pio sees SIGPIPE on subsequent writes, and the whole pipeline
+      # exits non-zero under `set -o pipefail` (enabled by setup-common.sh
+      # F43). Replacing with `>/dev/null` keeps the toolchain check while
+      # dropping the brittle output truncation.
+      - "pio platform show espressif32 >/dev/null"
   auditor:
     apt: [python3-venv, python3-pip, cppcheck]
     install:

@@ -179,7 +179,14 @@ for c in json.loads(sys.stdin.read()):
         [ -z "${cmds}" ] && continue
         while IFS= read -r cmd; do
             [ -z "${cmd}" ] && continue
-            if docker run --rm --entrypoint bash "${image}" -lc "${cmd}" \
+            # s011 11.g (F42/F43): use `bash -c` (NOT `-lc`) so the
+            # Dockerfile's `ENV PATH` is honoured — `-lc` re-sources the
+            # profile scripts and clobbers `/home/agent/.platformio-venv/bin`
+            # off the front of PATH, breaking venv-installed tools. Also
+            # wrap with `set -o pipefail` so a failure mid-pipeline
+            # surfaces honestly instead of being masked by the final
+            # stage's exit code.
+            if docker run --rm --entrypoint bash "${image}" -c "set -o pipefail; ${cmd}" \
                 >/dev/null 2>&1; then
                 log "  [verify ok] ${platform}/${role}: ${cmd}"
             else

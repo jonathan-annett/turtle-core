@@ -75,12 +75,18 @@ if [ -n "${section}" ]; then
     # Argument mode: build the deterministic bootstrap prompt and pass it
     # via env to the auditor. The auditor entrypoint (s008 8.e) detects
     # BOOTSTRAP_PROMPT and invokes claude non-interactively.
+    #
+    # s011 11.f: BRIEF_PATH is passed alongside BOOTSTRAP_PROMPT so the
+    # entrypoint can read the brief's "Required tool surface" field and
+    # translate it into --allowed-tools.
     bootstrap_prompt="Read /work/${brief_path} and execute the audit per /methodology/auditor-guide.md (symlinked as /work/CLAUDE.md). Your private workspace is /auditor (writable). The main repo at /work is read-only. Write the audit report to the auditor repo at the path named in the brief, commit and push, then discharge."
 
     echo "Commissioning auditor against ${brief_path}"
     BOOTSTRAP_PROMPT="${bootstrap_prompt}" \
+    BRIEF_PATH="/work/${brief_path}" \
         docker compose -p "${project}" --profile ephemeral run --rm \
             -e BOOTSTRAP_PROMPT \
+            -e BRIEF_PATH \
             auditor
 else
     # Shell-only mode: legacy path. Print a manual-mode banner and drop
