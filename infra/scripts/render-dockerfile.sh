@@ -32,10 +32,17 @@
 #
 # Usage:
 #   render-dockerfile.sh <role> <comma-separated-platforms>
+#   render-dockerfile.sh --stdout <role> <comma-separated-platforms>
+#
+# Default mode writes infra/<role>/Dockerfile.generated (and chmods 0444),
+# preserving s009's setup-time invocation contract. The --stdout flag
+# (added in s013) emits the rendered Dockerfile content to stdout
+# instead and is the entry point used by compose-image.sh during JIT
+# composition — the caller writes its own tempfile.
 #
 # Example:
 #   render-dockerfile.sh coder-daemon go,python-extras
-#   render-dockerfile.sh auditor      platformio-esp32
+#   render-dockerfile.sh --stdout auditor platformio-esp32
 #
 # Exit codes:
 #   0  success
@@ -44,9 +51,15 @@
 
 set -euo pipefail
 
+STDOUT_MODE=0
+if [ "${1:-}" = "--stdout" ]; then
+    STDOUT_MODE=1
+    shift
+fi
+
 if [ "$#" -ne 2 ]; then
-    echo "Usage: $0 <role> <comma-platforms>" >&2
-    echo "  role        one of: coder-daemon, auditor" >&2
+    echo "Usage: $0 [--stdout] <role> <comma-platforms>" >&2
+    echo "  role        one of: coder-daemon, auditor, planner, onboarder" >&2
     echo "  platforms   comma-separated platform names; 'default' allowed" >&2
     exit 1
 fi
@@ -55,8 +68,8 @@ ROLE="$1"
 PLATFORMS_CSV="$2"
 
 case "${ROLE}" in
-    coder-daemon|auditor) ;;
-    *) echo "render-dockerfile.sh: unknown role '${ROLE}' (expected coder-daemon or auditor)" >&2; exit 1 ;;
+    coder-daemon|auditor|planner|onboarder) ;;
+    *) echo "render-dockerfile.sh: unknown role '${ROLE}' (expected coder-daemon, auditor, planner, or onboarder)" >&2; exit 1 ;;
 esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -110,17 +123,25 @@ for j in "${platform_jsons[@]:-}"; do
     python3 -c 'import json,sys; sys.stdout.write(json.dumps(json.loads(sys.stdin.read())) + "\n")' <<<"${j}" >>"${jsons_file}"
 done
 
-# Remove any prior generated file (it was chmod 0444 by a previous run,
-# which would block the redirect below). The renderer is the sole writer
-# for this path.
-rm -f "${output}"
+# In stdout mode, render to a tempfile then cat to stdout so the
+# python heredoc's stdout doesn't fight with bash redirects. In file
+# mode, remove any prior generated file (it was chmod 0444 by a
+# previous run, which would block the redirect below). The renderer is
+# the sole writer for the file-mode path.
+if [ "${STDOUT_MODE}" -eq 1 ]; then
+    render_target=$(mktemp)
+    trap 'rm -f "${jsons_file}" "${render_target}"' EXIT
+else
+    rm -f "${output}"
+    render_target="${output}"
+fi
 
 # Hand off to python for the actual rendering.
 ROLE="${ROLE}" \
 PLATFORMS_CSV="${PLATFORMS_CSV}" \
 PLATFORMS_FILE="${jsons_file}" \
 TEMPLATE_FILE="${template}" \
-python3 - >"${output}" <<'PY'
+python3 - >"${render_target}" <<'PY'
 import json, os, sys
 
 role = os.environ["ROLE"]
@@ -269,10 +290,16 @@ header = (
 sys.stdout.write(header + head + mid + tail)
 PY
 
-# Mark the generated file read-only — a human edit will be silently
-# clobbered on next setup run, and a chmod 0444 makes the contract
-# explicit. The renderer recreates the file each invocation, so the
-# read-only mode never blocks rendering itself.
-chmod 0444 "${output}"
-
-echo "[render-dockerfile] wrote ${output} (role=${ROLE}, platforms=${PLATFORMS_CSV})"
+if [ "${STDOUT_MODE}" -eq 1 ]; then
+    # Emit the rendered content to stdout. No chmod, no banner —
+    # callers (compose-image.sh) want clean content suitable for
+    # `docker build -f -`.
+    cat "${render_target}"
+else
+    # Mark the generated file read-only — a human edit will be silently
+    # clobbered on next setup run, and a chmod 0444 makes the contract
+    # explicit. The renderer recreates the file each invocation, so the
+    # read-only mode never blocks rendering itself.
+    chmod 0444 "${output}"
+    echo "[render-dockerfile] wrote ${output} (role=${ROLE}, platforms=${PLATFORMS_CSV})"
+fi

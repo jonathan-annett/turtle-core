@@ -71,6 +71,7 @@ A few conventions to know:
 - **Read this file first.** It saves the long preamble that every substrate-iteration brief would otherwise reinvent.
 - **Check `FINDINGS.md` early.** Existing findings often inform current decisions, especially open and deferred ones.
 - **Read the latest handover.** Handovers are the durable carrier between chat-Claude sessions. The latest one tells you where the work left off, what's pending, and what the next concrete move is.
+- **"Recommendations baked in (override before dispatch)" is the substrate-iteration brief pattern.** Each design call states a position, the rationale, the considered alternative, and override-language. If a position is wrong for your read of the problem, raise it as an amendment **before** starting the work. Once dispatched, the design calls are committed; mid-section design changes need an explicit amendment. (Introduced with s013's F50 brief; the convention now applies to every substrate-iteration brief.)
 - **If you are a chat-Claude instance designing a brief**, your output is the brief plus an updated handover capturing design context. You don't run code or attach to substrates.
 - **If you are an implementing agent**, your output is the section report and pushed branch. You don't make design decisions outside the brief's scope without asking for an amendment.
 

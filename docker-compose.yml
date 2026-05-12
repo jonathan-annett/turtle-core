@@ -87,7 +87,13 @@ services:
   # ---------------------------------------------------------------------------
   planner:
     build: ./infra/planner
-    image: agent-planner:latest
+    # s013 (F50): PLANNER_IMAGE overrides the image tag at commission
+    # time. commission-pair.sh runs compose-image.sh to produce a
+    # hash-tagged image (`agent-planner-platforms:<hash>`) that
+    # carries the section's "Required platforms", then passes that
+    # tag here. Setup-time `docker compose build` leaves the env var
+    # unset and produces the default `agent-planner:latest` tag.
+    image: ${PLANNER_IMAGE:-agent-planner:latest}
     profiles: ["ephemeral"]
     depends_on:
       - coder-daemon
@@ -120,7 +126,10 @@ services:
     build:
       context: ./infra/coder-daemon
       dockerfile: Dockerfile.generated
-    image: agent-coder-daemon:latest
+    # s013 (F50): CODER_DAEMON_IMAGE overrides the image tag at
+    # commission time. See the matching planner comment for the
+    # mechanism.
+    image: ${CODER_DAEMON_IMAGE:-agent-coder-daemon:latest}
     profiles: ["ephemeral"]
     environment:
       COMMISSION_PORT:   ${COMMISSION_PORT:-}
@@ -153,7 +162,12 @@ services:
   # ---------------------------------------------------------------------------
   onboarder:
     build: ./infra/onboarder
-    image: agent-onboarder:latest
+    # s013 (F50): ONBOARDER_IMAGE overrides the image tag at commission
+    # time. The onboarder's platform set is always empty (per F50
+    # design call 6) so its composed image is the static template
+    # build, but the env-override hook is the same shape as the other
+    # ephemeral roles.
+    image: ${ONBOARDER_IMAGE:-agent-onboarder:latest}
     profiles: ["ephemeral"]
     depends_on:
       - git-server
@@ -185,7 +199,9 @@ services:
     build:
       context: ./infra/auditor
       dockerfile: Dockerfile.generated
-    image: agent-auditor:latest
+    # s013 (F50): AUDITOR_IMAGE overrides the image tag at commission
+    # time. See the matching planner comment for the mechanism.
+    image: ${AUDITOR_IMAGE:-agent-auditor:latest}
     profiles: ["ephemeral"]
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

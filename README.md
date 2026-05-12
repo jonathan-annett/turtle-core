@@ -445,8 +445,18 @@ project-template/
 │   ├── git-server/Dockerfile + entrypoint.sh + init-repos.sh +
 │   │                          git-shell-wrapper + hooks/update
 │   ├── keys/                ← per-role SSH keys (gitignored except .gitkeep)
-│   └── scripts/generate-keys.sh
-├── methodology/             ← spec, architect/planner/auditor/onboarder guides
+│   └── scripts/
+│       ├── generate-keys.sh
+│       ├── render-dockerfile.sh        ← s009 setup-time renderer; s013 added --stdout mode
+│       ├── compose-image.sh            ← s013: JIT platform composition (hash-tagged role images)
+│       ├── resolve-platforms.sh        ← s013: section+TLP+s009-fallback resolution
+│       ├── validate-tool-surface.sh    ← s013: brief-declared binaries vs image PATH (F52 closure)
+│       └── lib/
+│           ├── parse-tool-surface.sh   ← s011: section/audit-brief allowed-tools parser
+│           ├── parse-platforms.sh      ← s013: Required platforms / ## Platforms parser
+│           └── validate-platform.sh    ← s009: platform YAML schema validator
+├── methodology/             ← spec, architect/planner/auditor/onboarder guides;
+│   └── platforms/<name>.yaml ← platform registry (s009 + s013 hash semantics)
 ├── briefs/                  ← runtime: section/task briefs and reports
 ├── .pairs/                  ← runtime: per-pair env files (gitignored)
 ├── .gitignore
@@ -483,3 +493,10 @@ project. They don't enter any role container's view at runtime.
   `/methodology`.
 - **[`methodology/deployment-docker.md`](methodology/deployment-docker.md)** — the deployment design that the
   compose file and entrypoints implement.
+- **[`methodology/platforms/`](methodology/platforms)** — the platform
+  registry. Architects reference this when authoring TOP-LEVEL-PLAN.md's
+  `## Platforms` section and section briefs' `Required platforms`
+  field. The schema and per-platform install layers are documented in
+  [`methodology/platforms/README.md`](methodology/platforms/README.md);
+  the composition hash semantics that drive cache reuse / invalidation
+  are documented there too.

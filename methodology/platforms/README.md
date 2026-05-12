@@ -134,9 +134,10 @@ the renderer runs. It checks:
 - File parses as YAML.
 - `name` and `description` are present and non-empty.
 - `name` matches the filename (less the `.yaml` extension).
-- `roles` is a map; each present role is one of `coder-daemon` or
-  `auditor`; each role's `apt`/`install`/`verify` (if present) are
-  lists of strings; `env` (if present) is a string→string map.
+- `roles` is a map; each present role is one of `coder-daemon`,
+  `auditor`, `planner`, or `onboarder`; each role's
+  `apt`/`install`/`verify` (if present) are lists of strings; `env`
+  (if present) is a string→string map.
 - `runtime` (if present): `device_required` is a bool;
   `device_hint` is a string; `groups` is a list of strings.
 - `defaults` (if present): `test_runner`/`build_command` are
@@ -144,3 +145,36 @@ the renderer runs. It checks:
 
 A validation failure aborts setup with a clear diagnostic identifying
 the file and the failing field.
+
+## Composition hash semantics (F50 / s013)
+
+`infra/scripts/compose-image.sh` produces hash-tagged role images at
+commission time (s013 platform composition). The hash is a function
+of three inputs:
+
+1. The role name (`coder-daemon`, `auditor`, `planner`, `onboarder`).
+   Different roles have different base layers and warrant different
+   cache entries even with the same platform set.
+2. The canonical sorted set of platform names selected for the
+   commission. Duplicates and `default` are dropped; ordering is
+   normalised before hashing so `node,python-extras` and
+   `python-extras,node` produce the same hash.
+3. The **sha256 of each selected platform YAML's bytes**. This is the
+   "registry-entry content hash" that drives cache invalidation when
+   a registry entry changes — edit `node-extras.yaml`'s `install:`
+   list, and the next commission with `node-extras` produces a new
+   image hash and rebuilds. No new YAML field is required for this;
+   the file bytes themselves are the hash input.
+
+The resulting image is tagged `agent-<role>-platforms:<hash12>`,
+where `<hash12>` is the first 12 hex chars of the canonical hash.
+The s009 setup-time `agent-<role>:latest` tag is untouched —
+commission-time JIT and setup-time build coexist in the Docker
+local image cache without collision.
+
+The hash does **not** cover image content bytes. Two clones building
+the same declaration may pull different upstream package versions
+from apt/pip/npm between runs, yielding different image contents
+with the same tag. F50 doesn't promise byte-level reproducibility
+— that's downstream of upstream registries and is project-dependency-
+management territory, not substrate territory.

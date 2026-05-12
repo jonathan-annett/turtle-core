@@ -3,6 +3,21 @@
 
 FROM agent-base
 
+# ----------------------------------------------------------------------------
+# Project planner toolchain. The line below is the sentinel consumed by
+# infra/scripts/render-dockerfile.sh — the renderer composes the
+# selected platform plugin layers (methodology/platforms/<name>.yaml)
+# in place of this comment when producing the rendered Dockerfile.
+# With no platform layers (the typical case for the planner — it
+# orchestrates rather than builds), the sentinel is simply removed and
+# the resulting image is byte-equivalent to this template's static
+# build aside from a generated-file header. s013 (F50) made the
+# planner a participant in JIT composition so a section with
+# Required platforms: <list> can compose a planner image carrying
+# those platforms without special-casing the role.
+# ----------------------------------------------------------------------------
+# PLATFORM_INSERT_HERE
+
 USER agent
 
 COPY --chown=agent:agent --chmod=0755 entrypoint.sh /home/agent/entrypoint.sh
