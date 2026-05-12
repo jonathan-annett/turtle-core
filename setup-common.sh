@@ -73,12 +73,13 @@ export TURTLE_CORE_SETUP_AUTHORIZED=1
 # ---------------------------------------------------------------------------
 log "Ensuring directory layout..."
 mkdir -p \
-    "${repo_root}/infra/keys/architect" \
-    "${repo_root}/infra/keys/planner"   \
-    "${repo_root}/infra/keys/coder"     \
-    "${repo_root}/infra/keys/auditor"   \
-    "${repo_root}/infra/keys/human"     \
-    "${repo_root}/briefs"               \
+    "${repo_root}/infra/keys/architect"  \
+    "${repo_root}/infra/keys/planner"    \
+    "${repo_root}/infra/keys/coder"      \
+    "${repo_root}/infra/keys/auditor"    \
+    "${repo_root}/infra/keys/human"      \
+    "${repo_root}/infra/keys/onboarder"  \
+    "${repo_root}/briefs"                \
     "${repo_root}/.pairs"
 chmod 700 "${repo_root}/.pairs"
 chmod 700 "${repo_root}/infra/keys"/*

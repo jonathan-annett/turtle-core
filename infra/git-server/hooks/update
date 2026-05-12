@@ -83,6 +83,26 @@ if [ "${repo}" = "main.git" ]; then
         auditor)
             reject "auditor has no write access to the main repo (spec §3.3); audit reports go in the auditor repo, the architect ferries them"
             ;;
+        onboarder)
+            # s012: the onboarder is project-scoped and single-shot. It
+            # pushes twice to refs/heads/main during ./onboard-project.sh:
+            #   1) host-side "onboarding: import source materials" commit
+            #      that lands the brownfield source tree;
+            #   2) container-side "onboarding: handover brief" commit
+            #      that lands briefs/onboarding/handover.md.
+            # Both commits flow through onboarder credentials. Single-shot
+            # enforcement is at the script level (onboard-project.sh
+            # refuses to run if main contains anything beyond the bare-
+            # empty initial commit) rather than in this hook — a path-
+            # based rule cannot tell the import commit from a later push,
+            # and a tip-based rule would foreclose the import. We
+            # therefore allow onboarder pushes to refs/heads/main without
+            # path restriction, and reject every other ref.
+            case "${ref}" in
+                refs/heads/main) exit 0 ;;
+                *) reject "onboarder may push only to refs/heads/main" ;;
+            esac
+            ;;
         *)
             reject "unknown role '${user}'"
             ;;
@@ -95,7 +115,7 @@ elif [ "${repo}" = "auditor.git" ]; then
         architect)
             reject "architect has read-only access to the auditor repo (spec §3.2)"
             ;;
-        planner|coder)
+        planner|coder|onboarder)
             reject "${user} has no access to the auditor repo (spec §3.2)"
             ;;
         *)

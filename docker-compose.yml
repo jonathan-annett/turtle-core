@@ -143,6 +143,41 @@ services:
       - agent-net
 
   # ---------------------------------------------------------------------------
+  # onboarder: ephemeral, project-scoped, single-shot. Started by
+  # onboard-project.sh. Reads /source (the brownfield project tree, mounted
+  # read-only) and produces briefs/onboarding/handover.md in main. Lives in
+  # the "ephemeral" profile alongside planner/coder-daemon/auditor; no
+  # container_name so multiple invocations under different compose project
+  # namespaces don't collide (in practice the onboarder runs once per
+  # project so collisions are unlikely, but the convention is the same).
+  # ---------------------------------------------------------------------------
+  onboarder:
+    build: ./infra/onboarder
+    image: agent-onboarder:latest
+    profiles: ["ephemeral"]
+    depends_on:
+      - git-server
+    environment:
+      ANTHROPIC_API_KEY:     ${ANTHROPIC_API_KEY:-}
+      ONBOARDING_TYPE_HINT:  ${ONBOARDING_TYPE_HINT:-unknown}
+    volumes:
+      - claude-state-shared:/home/agent/.claude
+      - ./methodology:/methodology:ro
+      - ./infra/keys/onboarder:/home/agent/.ssh:ro
+      # Onboarder-specific mounts:
+      #   /source        — brownfield project tree (read-only).
+      #   /onboarding-intake.md — optional operator-supplied initial
+      #                  context. Defaults to /dev/null so the compose
+      #                  bind always has a source path; the entrypoint
+      #                  treats an empty file as "no intake provided".
+      - ${SOURCE_PATH:-/dev/null}:/source:ro
+      - ${INTAKE_FILE:-/dev/null}:/onboarding-intake.md:ro
+    networks:
+      - agent-net
+    stdin_open: true
+    tty: true
+
+  # ---------------------------------------------------------------------------
   # auditor: ephemeral, per audit. Started by audit.sh.
   # Built from Dockerfile.generated (s009; see coder-daemon comment).
   # ---------------------------------------------------------------------------
