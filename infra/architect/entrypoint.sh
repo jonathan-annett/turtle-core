@@ -91,4 +91,56 @@ cat <<'EOF'
 EOF
 
 cd /work
+
+# s012 A.6: first-attach handover detection. For brownfield projects that
+# went through ./onboard-project.sh, the onboarder produced a handover at
+# /work/briefs/onboarding/handover.md. On the architect's first attach
+# (no SHARED-STATE.md present yet — the architect hasn't done any work),
+# bootstrap the architect's first claude session against the handover so
+# the operator does not have to seed it manually.
+#
+# After the first attach, SHARED-STATE.md exists (the architect adopts it
+# from the handover candidate), and the trigger condition fails on every
+# subsequent attach — the architect resumes its persistent session via
+# `claude --resume` interactively as before. The handover file itself is
+# preserved on disk as a historical artifact; we only key off its
+# presence-without-SHARED-STATE for the bootstrap trigger.
+#
+# Greenfield projects (no /work/briefs/onboarding/handover.md) reach the
+# plain interactive shell with no behaviour change — exactly the same as
+# the architect entrypoint behaved before s012.
+handover_path="/work/briefs/onboarding/handover.md"
+shared_state_path="/work/SHARED-STATE.md"
+
+if [ -f "${handover_path}" ] && [ ! -f "${shared_state_path}" ]; then
+    bootstrap_prompt="Read ${handover_path}, which is the onboarding handover brief for this project (produced by the onboarder before you attached). It contains nine sections: project identity, source materials inventory, code structural review, history review, a SHARED-STATE.md candidate, a TOP-LEVEL-PLAN.md candidate, known unknowns, the operator's stated priorities, and carry-over hazards. Adopt the SHARED-STATE.md candidate and the TOP-LEVEL-PLAN.md candidate as your starting drafts at /work/SHARED-STATE.md and /work/TOP-LEVEL-PLAN.md. Refine them with the operator, who is attached to this session interactively. Use sections 7 (known unknowns) and 8 (operator's stated priorities) as your first agenda. When you and the operator are satisfied with SHARED-STATE.md and TOP-LEVEL-PLAN.md, commit and push them to main, then begin the project's methodology from this point."
+
+    echo
+    echo "Onboarding handover detected; bootstrapping architect's first session"
+    echo "against ${handover_path}."
+    echo
+    echo "On exit (Ctrl-D or 'exit'), you'll be dropped to a shell. Detach the"
+    echo "container without stopping it via Ctrl-P Ctrl-Q to keep the architect"
+    echo "running for subsequent ./attach-architect.sh sessions."
+    echo
+
+    # Plain `claude "<prompt>"` (not `claude -p`): the operator is in the
+    # loop, conversing with the architect interactively from the first
+    # message onward. This mirrors the onboarder entrypoint's pattern and
+    # differs deliberately from the planner/auditor entrypoints' --print
+    # invocation (those roles run without a human in the loop).
+    #
+    # No --allowed-tools / --permission-mode here: the architect's
+    # surface is broad by design and is governed by claude-code's
+    # default interactive permissioning, which suits the persistent
+    # architect-with-human conversational shape.
+    claude "${bootstrap_prompt}" || true
+
+    echo
+    echo "Architect bootstrap session ended. Dropping to interactive shell."
+    echo "Use 'claude --resume' to resume the session you just had, or"
+    echo "'claude' to start a new one."
+    echo
+fi
+
 exec bash -l
