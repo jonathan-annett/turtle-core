@@ -48,6 +48,7 @@ Path: `/briefs/sNNN-slug/section.brief.md`. You commit this to `main` directly.
 - **Out of scope.** Explicit non-goals. Saves you from scope creep and the planner from asking.
 - **Repo coordinates.** Base branch (`main`), section branch name to create.
 - **Required tool surface.** An explicit list of Claude Code tools and tool-scoped patterns the planner is permitted to use during the section. The substrate parses this field at commission time and translates it into the planner's `--allowedTools`. **Mandatory.** A missing or unparseable field fails the commission cleanly with an actionable error; the substrate does not default to a permissive list, and it does not silently deny — both are silent-failure modes you want to avoid. See **Authoring the tool-surface field** below for the format and concrete examples.
+- **Required platforms.** An optional list of target-language platforms the section needs in the dispatched-agent images (`coder-daemon`, `auditor`, and `planner` itself when planner-side verification needs them). Same fenced grammar as the tool-surface field but with platform names from `methodology/platforms/<name>.yaml` (e.g. `node-extras`, `python-extras`, `platformio-esp32`). Optional because most sections inherit the project superset from TOP-LEVEL-PLAN.md's `## Platforms` section — declare an explicit subset here only when the section specialises (firmware-only, server-only, etc.). The section's set must be a subset of the project superset; declaring a platform outside it fails commission. See **Decomposing a multi-platform project** below.
 - **Reporting requirements.** What the section report must contain.
 
 ## What you should expect in a section report
@@ -71,6 +72,7 @@ Path: `/briefs/sNNN-slug/audit.brief.md`. You commit this to `main` directly.
 - **Specific concerns to investigate.** Be aggressive here. "Look for X." "Verify Y cannot happen." Adversarial framing is what makes the audit useful.
 - **Sign-off criteria.** Explicit, binary pass/fail conditions. Not "the auth is secure" but "no credentials in logs; rate limiting verified by load test; password reset cannot be triggered for arbitrary accounts."
 - **Required tool surface.** Same field as in the section brief, scoped for the auditor. The substrate parses it and translates into the auditor's `--allowedTools`. Mandatory; fail-clean on absence. See **Authoring the tool-surface field** below — audit briefs often need different tools from section briefs (read-only main-repo inspection, plus whatever verification tooling the audit requires).
+- **Required platforms.** Same field as in the section brief, scoped for the auditor. Optional; inherits the project superset if absent. Audit briefs may legitimately need a different platform set from the section brief — e.g. an audit that only inspects firmware artifacts on a Node-server-plus-ESP32 project may declare just `platformio-esp32` to avoid pulling in node tooling. The substrate composes the auditor image with the resolved set and validates the audit brief's tool surface against it (F50 / F52). See **Decomposing a multi-platform project** below.
 - Auditor repo coordinates: where in the auditor repo the audit report should land.
 
 ## Authoring the tool-surface field
@@ -122,6 +124,103 @@ When authoring an audit brief's tool surface, think explicitly about which worki
 F51 manifested twice in real audits (two different auditor-invented workarounds for the same missing pattern); the doc-fix lives here so the next audit brief you author prompts the right thinking. The substrate's brief parser does not distinguish `Bash(git -C /work …)` from `Bash(cd …)` plus `Bash(git …)`; both are valid surfaces. The discipline is on the architect to pick the one that matches the auditor's mount geometry.
 
 Be **precise**. Daemon-level denial is silent for the recipient — the planner/auditor sees a tool call rejected and may not understand why. Tighter than necessary is recoverable (you re-author the brief with the extra pattern, the human re-commissions); looser than necessary is a quiet security/correctness hazard.
+
+## Decomposing a multi-platform project
+
+A project's platform set is the list of target-language toolchains its
+sections need in dispatched-agent images. For a Node web service it
+might be `node-extras`; for an embedded firmware project,
+`platformio-esp32`; for a polyglot Node-server-plus-ESP32-firmware
+project, both.
+
+Declare this once at the project level, then specialise per section.
+
+### `## Platforms` in TOP-LEVEL-PLAN.md (the project superset)
+
+Add a `## Platforms` section to `TOP-LEVEL-PLAN.md` listing every
+platform any section in the project may need. Same fenced grammar as
+the tool-surface field — a YAML simple list or JSON array:
+
+````markdown
+## Platforms
+
+```yaml
+- node-extras
+- platformio-esp32
+```
+````
+
+This is the **superset** for the whole project. Any section may
+declare a platform here, but no section may declare a platform that
+isn't here.
+
+If `## Platforms` is absent, the substrate falls back to the s009
+substrate-setup platform selection (recorded at
+`.substrate-state/platforms.txt`). Migration from s009 to s013 (F50)
+is therefore graceful: existing substrates set up with
+`--platform=<name>` continue to work without an explicit
+`TOP-LEVEL-PLAN.md` declaration. The fallback is durable, not
+transitional — adopt the explicit `## Platforms` block when
+convenient.
+
+### `Required platforms` in a section brief (the section subset)
+
+When a section specialises — firmware-only work, server-only work,
+HIL probe construction that needs only one toolchain — declare its
+specific subset in the section brief's "Required platforms" field
+(see **What a good section brief contains** above). The substrate's
+composition mechanism then builds the agent image with only that
+subset, saving build time and keeping the agent's environment focused.
+
+If a section omits the field, it inherits the full project superset.
+That's safe but potentially heavier than needed.
+
+The subset rule is enforced: declaring a platform outside the
+TOP-LEVEL-PLAN.md superset fails commission with a clear error
+naming the offending platform(s).
+
+### TDD-with-mocks: prefer single-platform sections
+
+Most cross-platform work can be done with single-platform sections by
+using **mocks at the platform boundary**. A firmware/server pair is
+the canonical example:
+
+- The firmware section works against a **mocked server** (e.g. a Python
+  stub that responds to the firmware's HTTP calls with canned
+  fixtures). The section brief declares `Required platforms:
+  platformio-esp32`; the auditor image carries platformio-esp32, the
+  coder writes firmware against the contract, and verification is
+  HIL-on-the-board with the mock running in a test harness.
+- The server section works against a **mocked firmware client** (the
+  same contract from the other side — a node script that issues the
+  HTTP calls the firmware will issue). The section brief declares
+  `Required platforms: node-extras`; the auditor image carries
+  node-extras; verification is unit/integration tests against the
+  contract.
+
+Both sides converge on the same wire contract. Once both pass their
+single-platform audits, an integration section can verify the real
+firmware against the real server in one of two modes:
+
+- **Single-platform integration section** if the operator has the
+  firmware-running hardware and the server running locally or on the
+  LAN — the auditor brief picks one platform and exercises the live
+  pair via the registered remote-host SSH integration (s010) for the
+  hardware side.
+- **Multi-platform integration section** (`Required platforms:
+  node-extras, platformio-esp32`) if the section genuinely needs the
+  agent to drive both sides from one image. Heavier, slower to
+  compose; declare it only when the integration shape requires it.
+
+**Default to single-platform per section.** Multi-platform sections
+are the explicit exception, not the convenient norm. Mocks-at-the-
+boundary keep the work-mode lean, the briefs focused, and the
+auditor's adversarial framing meaningful.
+
+When you do author a multi-platform section, say so in the section
+brief's objective and pin the audit's adversarial criteria to the
+cross-platform contract (not to either side alone) — that's the
+discipline that earns the heavier image.
 
 ## What you should expect in an audit report
 

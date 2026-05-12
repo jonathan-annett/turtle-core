@@ -271,6 +271,25 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# ---------------------------------------------------------------------------
+# s013 (F50): platform composition. The onboarder's platform set is
+# always empty by design (per F50 design call 6 — the onboarder does
+# not build, run, or test the source). compose-image.sh produces a
+# hash-tagged image at the empty set; in practice this is a cache hit
+# from the substrate's first onboarder commission. The mechanism is
+# universal (every dispatched role goes through compose-image.sh);
+# the onboarder's specific case is "empty platform set produces the
+# static template build". No tool-surface validation: the onboarder
+# has no section brief, and its embedded allowed-tools list (s012,
+# F58) is invariant.
+# ---------------------------------------------------------------------------
+echo "[onboard] composing onboarder image..."
+if ! onboarder_image=$("${repo_root}/infra/scripts/compose-image.sh" onboarder ""); then
+    echo "[onboard] FATAL: onboarder image composition failed." >&2
+    exit 1
+fi
+export ONBOARDER_IMAGE="${onboarder_image}"
+
 echo "Commissioning onboarder (project=${project})..."
 echo
 

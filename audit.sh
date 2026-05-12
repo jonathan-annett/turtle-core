@@ -64,6 +64,46 @@ if [ -n "${section}" ]; then
     check_brief_exists "${brief_path}" || exit $?
 fi
 
+# ---------------------------------------------------------------------------
+# s013 (F50): platform composition + tool-surface validation.
+#
+# Same shape as commission-pair.sh: resolve platforms (section brief
+# override → TOP-LEVEL-PLAN.md project superset → s009 fallback),
+# compose a hash-tagged auditor image with that platform set, and
+# validate the audit brief's "Required tool surface" against the
+# composed image. Pass the resulting tag to docker-compose via
+# AUDITOR_IMAGE.
+#
+# In shell-only mode (no section slug), composition uses the project
+# superset only; tool-surface validation is skipped (no brief).
+# ---------------------------------------------------------------------------
+echo "[audit] resolving platform set..."
+if ! platforms_csv=$("${repo_root}/infra/scripts/resolve-platforms.sh" "${brief_path}"); then
+    echo "[audit] FATAL: platform resolution failed (see error above)." >&2
+    exit 1
+fi
+echo "[audit] platforms: ${platforms_csv:-(none)}"
+
+echo "[audit] composing auditor image..."
+if ! auditor_image=$("${repo_root}/infra/scripts/compose-image.sh" auditor "${platforms_csv}"); then
+    echo "[audit] FATAL: auditor image composition failed." >&2
+    exit 1
+fi
+export AUDITOR_IMAGE="${auditor_image}"
+
+if [ -n "${brief_path}" ]; then
+    echo "[audit] parsing tool surface from ${brief_path}..."
+    if ! tools_csv=$("${repo_root}/infra/scripts/lib/parse-tool-surface.sh" "${brief_path}"); then
+        echo "[audit] FATAL: could not parse 'Required tool surface' from audit brief." >&2
+        exit 1
+    fi
+    echo "[audit] validating auditor image against tool surface..."
+    if ! "${repo_root}/infra/scripts/validate-tool-surface.sh" "${auditor_image}" "${tools_csv}" "${platforms_csv}"; then
+        echo "[audit] FATAL: tool-surface validation failed (see error above)." >&2
+        exit 1
+    fi
+fi
+
 cleanup() {
     echo
     echo "Tearing down auditor (project=${project})..."

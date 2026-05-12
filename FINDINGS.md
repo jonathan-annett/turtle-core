@@ -7,6 +7,8 @@ new one.
 
 **Next available F-number: F59.**
 
+(F50 and F52 were resolved in s013 — see entries below. No new findings surfaced during s013's substrate-iteration work.)
+
 ## How to use this register
 
 - **Adding a finding.** Append the next sequential F-number with
@@ -140,19 +142,33 @@ that planner/auditor entrypoints use to set `--allowed-tools` +
 
 ### F50 — platform composition
 
-**Status:** deferred (scheduled). **Severity:** HIGH. **Origin:**
+**Status:** fixed in s013. **Severity:** HIGH. **Origin:**
 s011 smoke run (auditor image lacked node/npm).
-**Planned resolution:** dedicated F50 section between A and B
-in the migration-onboarding sequence.
 
-Substrate doesn't auto-couple a section's platform needs to
-agent images. Affects auditor, coder, and the upcoming code
-migration agent (Section B). Architect/spec should declare which
-platforms a section depends on; substrate should auto-ensure
-auditor + coder + code-migration images have those platforms
-composed in. Once platforms are in the image, ecosystem-level
-install (`npm install`, `pip --user`, `go install`) works at
-runtime — the platform layer is deliberately minimal bootstrap.
+Substrate didn't auto-couple a section's platform needs to agent
+images. Affected auditor, coder, and the upcoming code migration
+agent (Section B). Resolved in s013 by:
+
+- TOP-LEVEL-PLAN.md `## Platforms` section declaring the project-
+  wide superset; section briefs may declare an optional `Required
+  platforms` subset override; section ⊆ project superset is
+  enforced.
+- `infra/scripts/compose-image.sh` composes a hash-tagged role
+  image at commission time (`agent-<role>-platforms:<hash12>`),
+  cached locally by sha256 of (role + canonical sorted platform
+  list + each platform YAML's bytes). Same declaration + unchanged
+  registry → cache hit. Registry edit → automatic invalidation.
+- Coverage extends to coder-daemon, auditor, planner, and
+  onboarder. The s009 setup-time `agent-<role>:latest` tag is
+  preserved as a separate namespace; existing substrates continue
+  to work unchanged.
+- `commission-pair.sh`, `audit.sh`, and `onboard-project.sh` each
+  resolve platforms, compose, and (for the brief-bearing scripts)
+  validate the tool surface before bringing the agent up.
+- Backward compatibility: substrates without `## Platforms` in
+  TOP-LEVEL-PLAN.md fall back to `.substrate-state/platforms.txt`
+  (s009's record of the setup-time selection). The fallback is
+  durable, not transitional.
 
 ### F51 — audit-brief tool surface omitted cd / git -C patterns
 
@@ -174,13 +190,23 @@ authoring side) and a symmetric subsection to
 
 ### F52 — xxd granted in tool surface but not installed in image
 
-**Status:** deferred. **Severity:** LOW. **Origin:** s011 smoke run.
+**Status:** fixed in s013. **Severity:** LOW. **Origin:** s011
+smoke run. **Resolved as part of:** F50 (s013) — bundled
+deliberately because platform composition and tool-surface
+validation share the same commission-time gate; splitting them
+would have validated the image at a different point than the
+composition that produced it.
 
 `xxd` granted in tool surface but not installed in the auditor
 image; no validation between the allowlist and image contents.
-Tooling gap; could be a small validator at setup or commission
-time that checks every binary named in the allowlist is on PATH
-in the target image.
+Resolved by `infra/scripts/validate-tool-surface.sh`, which
+extracts the distinct binaries named in any `Bash(<bin> ...)`
+pattern and runs `docker run --rm <image-tag> ... command -v <bin>`
+to verify each is on PATH. A miss fails commission with a clear
+error naming the missing binaries and the platform set used.
+Distinct from `infra/scripts/lib/validate-platform.sh` (s009),
+which validates YAML schema; the two have non-overlapping
+concerns and keep their distinct names.
 
 ### F53 — smoke runbook placeholder syntax confuses bash
 

@@ -62,6 +62,61 @@ if [ -n "${section}" ]; then
     check_brief_exists "${brief_path}" || exit $?
 fi
 
+# ---------------------------------------------------------------------------
+# s013 (F50): platform composition + tool-surface validation.
+#
+# Resolve the section's platform set (section brief override → project
+# superset from TOP-LEVEL-PLAN.md → s009 substrate-state fallback),
+# compose hash-tagged images for the planner and coder-daemon at the
+# resolved set, and validate that every Bash-anchored binary in the
+# section brief's "Required tool surface" is present in the planner
+# image. Both images are passed into docker-compose at run-time via
+# PLANNER_IMAGE / CODER_DAEMON_IMAGE env-var overrides (see compose
+# file).
+#
+# In shell-only mode (no section slug), the section override is skipped
+# and the project superset alone drives composition. Tool-surface
+# validation is skipped because there is no brief.
+# ---------------------------------------------------------------------------
+echo "[commission-pair] resolving platform set..."
+if ! platforms_csv=$("${repo_root}/infra/scripts/resolve-platforms.sh" "${brief_path}"); then
+    echo "[commission-pair] FATAL: platform resolution failed (see error above)." >&2
+    exit 1
+fi
+echo "[commission-pair] platforms: ${platforms_csv:-(none)}"
+
+echo "[commission-pair] composing planner image..."
+if ! planner_image=$("${repo_root}/infra/scripts/compose-image.sh" planner "${platforms_csv}"); then
+    echo "[commission-pair] FATAL: planner image composition failed." >&2
+    exit 1
+fi
+export PLANNER_IMAGE="${planner_image}"
+
+echo "[commission-pair] composing coder-daemon image..."
+if ! coder_daemon_image=$("${repo_root}/infra/scripts/compose-image.sh" coder-daemon "${platforms_csv}"); then
+    echo "[commission-pair] FATAL: coder-daemon image composition failed." >&2
+    exit 1
+fi
+export CODER_DAEMON_IMAGE="${coder_daemon_image}"
+
+# Tool-surface validation against the planner image. Skipped in shell-
+# only mode (no brief, no tool surface). The coder-daemon image is
+# composed but not validated here — coder tool surfaces come from
+# per-task briefs and are validated at the daemon level when the
+# planner commissions a task (s011 parse-tool-surface.js).
+if [ -n "${brief_path}" ]; then
+    echo "[commission-pair] parsing tool surface from ${brief_path}..."
+    if ! tools_csv=$("${repo_root}/infra/scripts/lib/parse-tool-surface.sh" "${brief_path}"); then
+        echo "[commission-pair] FATAL: could not parse 'Required tool surface' from section brief." >&2
+        exit 1
+    fi
+    echo "[commission-pair] validating planner image against tool surface..."
+    if ! "${repo_root}/infra/scripts/validate-tool-surface.sh" "${planner_image}" "${tools_csv}" "${platforms_csv}"; then
+        echo "[commission-pair] FATAL: tool-surface validation failed (see error above)." >&2
+        exit 1
+    fi
+fi
+
 env_file="${repo_root}/.pairs/.pair-${section:-shell-$$}.env"
 mkdir -p "${repo_root}/.pairs"
 chmod 700 "${repo_root}/.pairs"
