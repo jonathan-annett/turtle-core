@@ -1,12 +1,12 @@
 # Deployment: Docker
 
-Companion to the methodology spec (v2.3). The spec defines *what the substrate must do* (especially §3.3, the per-role access table); this document shows *how Docker does it*. Operational, not normative — if a detail here conflicts with the spec, the spec wins.
+Companion to the methodology spec (v2.5). The spec defines *what the substrate must do* (especially §3.3, the per-role access table); this document shows *how Docker does it*. Operational, not normative — if a detail here conflicts with the spec, the spec wins.
 
 ---
 
-## 1. The six-container model
+## 1. The seven-container model
 
-Each project runs up to six container types (five are core; the sixth is brownfield-only):
+Each project runs up to seven container types (five are core; the sixth and seventh are brownfield-only):
 
 | Container | Lifecycle | Purpose |
 |---|---|---|
@@ -15,13 +15,16 @@ Each project runs up to six container types (five are core; the sixth is brownfi
 | `planner` | ephemeral, per section | Fresh claude-code instance. Started by the human when the architect has produced a section brief. Decomposes the section into task briefs; commissions coders via the coder daemon. Discharges when the section is done. |
 | `coder-daemon` | ephemeral, paired with planner | Node HTTP server that accepts task-brief commissions from the planner and runs each coder as a subshell to completion. One coder at a time. Lives the same lifetime as its planner. |
 | `auditor` | ephemeral, per audit | Fresh claude-code instance. Started by the human when the architect has produced an audit brief. Has read access to the main repo (at the section branch tip) and read/write access to the auditor repo. Discharges when the audit is done. |
-| `onboarder` | ephemeral, per project (single-shot) | Fresh claude-code instance. Started by the human via `./onboard-project.sh` for **brownfield migrations only**. Reads the source materials at `/source` (read-only), elicits operator priorities and unknowns interactively, and produces the onboarding handover brief at `briefs/onboarding/handover.md` in main. Runs once per project — single-shot enforced by the entry script. Greenfield projects skip this container entirely. |
+| `onboarder` | ephemeral, per project (single-shot across three phases) | Fresh claude-code instance. Started by the human via `./onboard-project.sh` for **brownfield migrations only**. Phase-1 elicits operator priorities, confirms inferred platforms, writes the migration brief and a draft handover; phase-3 (a fresh container after the code-migration agent runs) reads the migration report and produces the final handover at `briefs/onboarding/handover.md`. Greenfield projects skip this container entirely. |
+| `code-migration` | ephemeral, per onboarding (single-shot, sub-agent of onboarder) | Fresh claude-code instance. Dispatched by `infra/scripts/dispatch-code-migration.sh` between onboarder phases 1 and 3. Reads the brownfield source at `/source` (same read-only mount the onboarder used) plus its migration brief at `briefs/onboarding/code-migration.brief.md`. Performs structural review only — lint, syntax, dependency resolution, import-graph closure, orphan detection — and commits a survey report at `briefs/onboarding/code-migration.report.md`. Single-shot per onboarding. Brownfield-only. |
 
 The `coder-daemon` is what gives the planner autonomy: the planner can commission coders iteratively without the human in the loop for every task. The planner posts to the daemon over HTTP; the daemon spawns coder subshells inside its own container; sqlite tracks the audit trail.
 
 Coder subshells are *not* their own containers. They share the daemon's filesystem and identity. Cross-project isolation is preserved by running the whole pair in a project-scoped compose namespace; cross-task isolation within a section is methodology discipline plus the git server's per-branch hooks. (Concurrent coders are not part of this methodology — one coder at a time per planner.)
 
-The `onboarder` deserves a separate note. Unlike the five core containers, it has no role in the steady-state methodology — it exists only to bridge a brownfield project into a state where the methodology can take over. Its output (the handover brief) is consumed exactly once, on the architect's first attach for the project; thereafter the container is gone and the methodology runs as if the project had been greenfield from day one. See §12 for the onboarding workflow.
+The `onboarder` deserves a separate note. Unlike the five core containers, it has no role in the steady-state methodology — it exists only to bridge a brownfield project into a state where the methodology can take over. Its output (the handover brief) is consumed exactly once, on the architect's first attach for the project; thereafter the container is gone and the methodology runs as if the project had been greenfield from day one. See §6.4 for the onboarding workflow.
+
+The `code-migration` container is similarly bridge-only. It exists as a sub-agent of the onboarder: dispatched between the onboarder's elicitation phase and its synthesis phase to perform structural review of the brownfield source, then discharged. The migration report it produces becomes section 3 of the handover via the onboarder's phase-3 integration pass. The `code-migration` container is named with a descriptive form rather than a profession name (architect, planner, coder, auditor, onboarder) to signal its sub-agent scope — see the methodology spec §4 "Code migration agent" and `methodology/code-migration-agent-guide.md`.
 
 ---
 
@@ -511,34 +514,49 @@ Auditor reads the audit brief, produces the audit report into the auditor repo, 
 
 Greenfield projects skip this step entirely — the architect attaches with an empty `SHARED-STATE.md` and a human-and-architect-authored `TOP-LEVEL-PLAN.md`, exactly as §6.1 describes.
 
-For **brownfield projects** (existing code, existing history, existing notes — anything pre-methodology that the operator wants to bring under the methodology), the onboarder runs once before the architect attaches. The operator points it at the source materials; the onboarder reads them, elicits priorities and unknowns from the operator interactively, and produces a handover brief at `briefs/onboarding/handover.md` that the architect reads as bootstrap context on first attach.
+For **brownfield projects** (existing code, existing history, existing notes — anything pre-methodology that the operator wants to bring under the methodology), the onboarder runs across three phases driven by `./onboard-project.sh`. Phase 1 elicits priorities and authors a migration brief; phase 2 (host-side) dispatches the code migration agent for structural review; phase 3 integrates the agent's findings into a final handover that the architect adopts on first attach.
 
 ```bash
-./onboard-project.sh <source-path> [--type 1|2|3|4] [--intake-file <path>]
+./onboard-project.sh <source-path> [--type 1|2|3|4] [--intake-file <path>] [--platforms <csv>]
 ```
 
 The script (single-shot — refuses to run a second time for the same project):
+
 - Validates `<source-path>` exists and is a directory.
 - Checks that `git-server` and `architect` containers are running.
-- Inspects the project's `main.git` on the substrate's `git-server`: if `main` contains anything beyond the initial empty commit established by setup, the script refuses (this is the single-shot enforcement; nothing below this step runs if the check fails).
-- Imports the source tree as an "onboarding: import source materials" commit on `main`, using the onboarder identity. This commit is made via a one-shot helper container on `agent-net` using the onboarder SSH key.
-- Builds the canonical onboarder bootstrap prompt, sets it as `BOOTSTRAP_PROMPT`, sets `SOURCE_PATH`, `INTAKE_FILE`, and `ONBOARDING_TYPE_HINT` in the environment, and runs `docker compose run --rm onboarder`.
-- The onboarder container's entrypoint detects `BOOTSTRAP_PROMPT` and invokes `claude "$BOOTSTRAP_PROMPT"` interactively (no `-p`, unlike planner/auditor — the onboarder is human-in-loop during elicitation). The operator converses with claude through the full synthesis-and-elicitation pass.
-- When the onboarder discharges (claude exits, then `bash -l`), the script tears the compose project down and prints a next-step pointer to `./attach-architect.sh`.
+- Inspects the project's `main.git`: if `main` contains anything beyond the initial empty commit established by setup, the script refuses (single-shot enforcement; nothing below runs if the check fails).
+- Imports the source tree as an `onboarding: import source materials` commit on `main`, using the onboarder identity.
+- **Platform inference.** Runs `infra/scripts/infer-platforms.sh` against the source tree, detecting canonical signal files (`package.json`, `requirements.txt`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `platformio.ini`, `CMakeLists.txt`, standalone `Makefile`) and producing a comma-separated platform CSV. If `--platforms=<csv>` was supplied, inference is skipped and the operator's set becomes authoritative.
+- **Phase 1.** Composes the onboarder image (empty platform set per F50 design call 6) and runs `docker compose run --rm onboarder` with `BOOTSTRAP_PROMPT` set to the phase-1 prompt. The onboarder's entrypoint detects `BOOTSTRAP_PROMPT` and invokes `claude "$BOOTSTRAP_PROMPT"` interactively (no `-p`; F56). The operator converses with claude through the elicitation pass; the onboarder confirms the inferred platforms, writes `briefs/onboarding/code-migration.brief.md` (commissioning artifact for the code migration agent — see `methodology/code-migration-brief-template.md`) and `briefs/onboarding/handover.draft.md` (handover with section 3 as a TODO placeholder), commits both with the message `onboarding: phase 1 — migration brief + draft handover`, and discharges.
+- **Phase 2.** The host runs `infra/scripts/dispatch-code-migration.sh`. The helper composes a hash-tagged `agent-code-migration-platforms:<hash12>` image with the platforms declared in the migration brief (the F50 mechanism), validates the brief's "Required tool surface" against the composed image (F52 closure), and runs the agent autonomously (`claude -p`, no operator-in-loop). The agent produces `briefs/onboarding/code-migration.report.md` and commits with the message `onboarding: code-migration report`. The git-server's update hook restricts the `code-migration` role's pushes to that exact path on `refs/heads/main`.
+- **Phase 3.** A fresh onboarder container runs with the phase-3 `BOOTSTRAP_PROMPT`. Claude reads the draft handover, the migration brief, and the migration report; integrates the report's findings into section 3 of the handover; writes the final `briefs/onboarding/handover.md`; commits with the exact message `onboarding: handover brief`; pushes; discharges.
+- Restarts the architect so its entrypoint runs again with the just-pushed handover present in `/work`. The entrypoint pulls `/work` on every start (F55) and detects the handover, which seeds the architect's first claude session on the operator's next `./attach-architect.sh` call.
 
-The canonical onboarder bootstrap prompt:
+The canonical phase-1 bootstrap prompt (set by `./onboard-project.sh`):
 
-> Read /methodology/onboarder-guide.md (symlinked as /work/CLAUDE.md) and /methodology/onboarder-handover-template.md. The brownfield source materials are at /source (read-only); they have already been imported into /work as the initial commit. Your project type hint is: \<1|2|3|4|unknown\>. Operator-supplied initial context (if any) is at /onboarding-intake.md (a zero-length or absent file means none was provided). Synthesise the project, elicit priorities and unknowns from the operator interactively, and produce the handover brief at /work/briefs/onboarding/handover.md following the nine-section structure in the template. When the operator is satisfied with the handover, commit with the exact message 'onboarding: handover brief', push to origin main, and discharge.
+> Read /methodology/onboarder-guide.md (symlinked as /work/CLAUDE.md), /methodology/onboarder-handover-template.md, and /methodology/code-migration-brief-template.md. The brownfield source materials are at /source (read-only); they have already been imported into /work as the initial commit. Your project type hint is: \<1|2|3|4|unknown\>. Operator-supplied initial context (if any) is at /onboarding-intake.md.
+>
+> Proposed platform set (from <inference|--platforms>): "<csv>". Confirm or correct this with the operator during your elicitation pass; the confirmed set goes in the migration brief's Required platforms field.
+>
+> THIS IS PHASE 1 OF THREE. Your tasks: synthesise the project, elicit priorities and unknowns from the operator interactively, confirm or correct the proposed platform set, author /work/briefs/onboarding/code-migration.brief.md per the migration-brief template, author /work/briefs/onboarding/handover.draft.md per the handover template with section 3 as a TODO placeholder, commit both with the message 'onboarding: phase 1 — migration brief + draft handover', push, discharge.
 
-After the onboarder discharges, the operator runs `./attach-architect.sh`. The architect's entrypoint detects `briefs/onboarding/handover.md` in `/work` together with the absence of `/work/SHARED-STATE.md` (first attach for the project) and seeds the architect's first claude session against the handover using a canonical bootstrap prompt:
+The canonical phase-3 bootstrap prompt:
 
-> Read /work/briefs/onboarding/handover.md, which is the onboarding handover brief for this project (produced by the onboarder before you attached). It contains nine sections: project identity, source materials inventory, code structural review, history review, a SHARED-STATE.md candidate, a TOP-LEVEL-PLAN.md candidate, known unknowns, the operator's stated priorities, and carry-over hazards. Adopt the SHARED-STATE.md candidate and the TOP-LEVEL-PLAN.md candidate as your starting drafts at /work/SHARED-STATE.md and /work/TOP-LEVEL-PLAN.md. Refine them with the operator, who is attached to this session interactively. Use sections 7 (known unknowns) and 8 (operator's stated priorities) as your first agenda. When you and the operator are satisfied with SHARED-STATE.md and TOP-LEVEL-PLAN.md, commit and push them to main, then begin the project's methodology from this point.
+> Read /work/briefs/onboarding/handover.draft.md (your phase-1 work), /work/briefs/onboarding/code-migration.brief.md (the agent's commissioning brief), and /work/briefs/onboarding/code-migration.report.md (the agent's structural survey report; survey feedstock — not a gate). Read /methodology/onboarder-guide.md, /methodology/onboarder-handover-template.md, and /methodology/code-migration-report-template.md.
+>
+> THIS IS PHASE 3 OF THREE. Your tasks: integrate the migration report's findings into section 3 of the handover (per-component intent, structural completeness, severity-graded findings); cross-integrate operational notes and open questions into other handover sections as warranted; produce /work/briefs/onboarding/handover.md as the FINAL handover with the canonical heading wording; commit with the exact message 'onboarding: handover brief'; push to origin main; discharge.
 
-On the architect's *second* and subsequent attaches, `/work/SHARED-STATE.md` exists (the architect committed it during the first attach) and the trigger condition is no longer satisfied; the bootstrap is skipped and the architect drops to the plain interactive shell for `claude --resume`, identical to greenfield behaviour from that point on.
+The canonical code-migration bootstrap prompt (set by `dispatch-code-migration.sh`):
 
-The handover file itself is preserved on disk indefinitely as a historical artifact. It is committed once, by the onboarder, and never edited; the architect references it from `SHARED-STATE.md` rather than rewriting it.
+> Read /work/briefs/onboarding/code-migration.brief.md, which is your migration brief. Read /methodology/code-migration-agent-guide.md (symlinked as /work/CLAUDE.md) and /methodology/code-migration-report-template.md for your operating boundaries and report shape. The brownfield source materials are at /source (read-only). Perform structural review per the brief — survey, do not build or run the project. Produce the migration report at /work/briefs/onboarding/code-migration.report.md following the six-section structure in the template. When the report is complete, commit with the exact message 'onboarding: code-migration report', push to origin main, and discharge.
 
-**Sub-agents (future).** The onboarder shell as shipped does **not** dispatch sub-agents. Sections 3 ("code structural review") and 4 ("history review") of the handover are filled by the onboarder with operator-acknowledged "no automated review run" notes. Two future sub-agents — the **code migration agent** and the **history migration agent** — will populate those slots when they land in subsequent sections. The shell ships first so those sub-agents can be specified against a stable interface.
+After phase 3 discharges, the operator runs `./attach-architect.sh`. The architect's entrypoint detects `briefs/onboarding/handover.md` in `/work` together with the absence of `/work/SHARED-STATE.md` (first attach for the project) and seeds the architect's first claude session against the handover using its canonical bootstrap prompt (unchanged from s012). On the architect's second and subsequent attaches, `SHARED-STATE.md` exists and the bootstrap is skipped — identical to greenfield behaviour from that point.
+
+The handover file is preserved on disk indefinitely as a historical artifact. The migration brief and migration report are similarly preserved; the architect may reference them from `SHARED-STATE.md` when historical context is useful.
+
+**Why dispatch is host-side, not from inside the onboarder.** The onboarder container has no docker socket access (it would need `/var/run/docker.sock` mounted in to invoke `dispatch-code-migration.sh`, a real privilege elevation). Hosting dispatch in `./onboard-project.sh` keeps the onboarder container's privilege minimal and matches the existing pattern (`audit.sh` and `commission-pair.sh` are also host-orchestrated). The two-phase split of the onboarder's interactive work is the trade-off; persistent state lives in `/work` (the project clone) across the phases.
+
+**History migration agent (future).** Section 4 of the handover ("History review") still uses the s012 "operator-acknowledged stub" pattern — the history migration agent ships in a later substrate section. When it lands, the onboarder will dispatch it analogously to the code migration agent (phase 2.5, or a fourth phase), and section 4 of the handover will receive analogous fill-in treatment.
 
 ### 6.5 Inspecting commission history
 

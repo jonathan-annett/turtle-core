@@ -10,7 +10,7 @@ Reusable infrastructure for the methodology described in
 substrate: a long-lived **architect** container, a private **git-server**
 hosting two bare repos, the ability to spin up ephemeral
 **planner+coder-daemon** pairs and **auditors** on demand, and an
-**onboarder** for importing existing codebases as new turtle-core projects.
+**onboarder** + **code migration agent** sub-agent for importing existing codebases as new turtle-core projects.
 
 The methodology, role guides, and Docker deployment design are all in the
 [`methodology/`](methodology) directory — the substrate exists to satisfy
@@ -30,7 +30,8 @@ After running setup, you have:
 | `planner`       | ephemeral, per section             | Started by `commission-pair.sh`. Decomposes a section into task briefs, commissions coders. |
 | `coder-daemon`  | ephemeral, paired with planner     | HTTP service on the agent network. Spawns claude-code subshells (one at a time) on the planner's command. |
 | `auditor`       | ephemeral, per audit               | Started by `audit.sh`. Read-only on `main`, read+write on `auditor.git`. Adversarial. |
-| `onboarder`     | ephemeral, per brownfield project  | Started by `onboard-project.sh`. Ingests an existing codebase, elicits structure with the operator, drafts initial `SHARED-STATE.md` and a handover for the architect, then discharges. Brownfield only — greenfield projects skip this entirely. |
+| `onboarder`     | ephemeral, per brownfield project  | Started by `onboard-project.sh`. Across three phases: elicits structure with the operator, commissions the code migration agent, integrates its findings into the final handover. Brownfield only — greenfield projects skip this entirely. |
+| `code-migration`| ephemeral, per onboarding (sub-agent of onboarder) | Dispatched by `infra/scripts/dispatch-code-migration.sh` between onboarder phases 1 and 3. Performs structural review of the brownfield source (lint, syntax, dependency resolution, import-graph closure, orphan detection — no build or behavioural test) and commits a survey report consumed by the onboarder's phase-3 integration pass. |
 
 All containers run as the unprivileged `agent` user. Per-role SSH keys are
 generated locally and never committed.
@@ -147,19 +148,43 @@ section brief, commit it, and exit.
 
 ```bash
 ./onboard-project.sh /path/to/existing/project
+# Or with an explicit platform set (skips inference):
+./onboard-project.sh /path/to/existing/project --platforms python-extras,node-extras
 ```
 
-The onboarder ingests the source tree (single-shot — fails if `main.git`
-already has commits), elicits project structure with you, drafts the
-initial `SHARED-STATE.md` and a handover at
-`briefs/onboarding/handover.md`, commits to `main`, then discharges. The
-architect container restarts automatically and picks up the handover on
-attach.
+The script ingests the source tree (single-shot — fails if `main.git`
+already has commits), then drives a three-phase onboarding:
+
+1. **Phase 1.** The onboarder runs interactively. Platforms are inferred
+   from canonical signal files at the source root (`package.json`,
+   `requirements.txt` / `pyproject.toml`, `Cargo.toml`, `go.mod`,
+   `platformio.ini`, `CMakeLists.txt`, `Makefile`); the operator confirms
+   or corrects. `--platforms=<csv>` bypasses inference entirely. The
+   onboarder elicits priorities and unknowns, writes a migration brief
+   commissioning the code migration agent, and writes a draft handover
+   (section 3 deferred to phase 3). Discharges.
+
+2. **Phase 2.** The host dispatches the code migration agent autonomously.
+   The agent reads `/source` (read-only), runs the lint / type-check /
+   dependency-resolve probes its tool surface grants, and commits a
+   six-section structural-survey report at
+   `briefs/onboarding/code-migration.report.md`. No operator interaction.
+
+3. **Phase 3.** A fresh onboarder container reads the migration report
+   and integrates its findings into section 3 of the handover. The final
+   handover is written to `briefs/onboarding/handover.md`. The architect
+   container restarts and picks up the handover on next attach.
 
 ```bash
 ./attach-architect.sh
-# Inside: the architect sees the handover, drafts the first section brief.
+# Inside: the architect sees the handover with the code-migration agent's
+# structural findings already integrated; drafts the first section brief.
 ```
+
+`--type 1|2|3|4` (source-material taxonomy) and `--platforms <csv>`
+(target-language toolchains) are **independent axes**; both, either, or
+neither may be supplied. See
+[`methodology/deployment-docker.md`](methodology/deployment-docker.md) §6.4 for the full onboarding workflow.
 
 ### Either path — section work from then on
 
@@ -201,7 +226,7 @@ container restarts.
 
 ### Refreshing ephemeral-role credentials
 
-Ephemeral roles (planner, coder-daemon, auditor, onboarder) read
+Ephemeral roles (planner, coder-daemon, auditor, onboarder, code-migration) read
 claude-code credentials from a *separate* shared volume
 (`claude-state-shared`) populated by setup from the architect's volume.
 When the architect's OAuth access token rotates (every several hours),
@@ -228,9 +253,11 @@ the env var when set.
 ## Role lifecycle (one-line summary; full detail in `methodology/`)
 
 0. **(Brownfield only.)** Operator runs `./onboard-project.sh <path>`.
-   Onboarder ingests the existing codebase, elicits structure with the
-   operator, drafts initial `SHARED-STATE.md` and an architect handover,
-   then discharges. Architect restarts and reads the handover.
+   The substrate runs a three-phase onboarding: onboarder elicits +
+   commissions a migration brief, host dispatches the code migration
+   agent for structural survey, onboarder integrates the agent's findings
+   into the final handover. Architect restarts and reads the handover on
+   first attach.
 1. Architect produces `TOP-LEVEL-PLAN.md` and a section brief, commits to
    `main` at `briefs/sNNN-slug/section.brief.md`.
 2. Human runs `./commission-pair.sh sNNN-slug`. The planner decomposes the
@@ -281,25 +308,37 @@ The auditor reads `briefs/s001-hello-timestamps/audit.brief.md` and writes
 its report to `auditor.git`. After it exits, follow the on-screen prompt
 to have the architect ferry the report into `main`.
 
-### Onboarder (per brownfield project, once)
+### Onboarder + code migration agent (per brownfield project, once)
 
 ```bash
-./onboard-project.sh /path/to/existing/project
+./onboard-project.sh /path/to/existing/project [--platforms <csv>]
 ```
 
 The script:
 
 1. Checks the substrate is up and that `main.git` has no commits yet
    (single-shot — onboarding only runs against a fresh substrate).
-2. Generates an onboarder keypair if not already present.
+2. Generates onboarder and code-migration keypairs if not already present.
 3. Imports the source tree into a temporary clone of `main.git` via a
    one-shot helper container, then pushes the initial commit.
-4. Brings up the `onboarder` container with read-only access to the
-   imported source under `/source` and a working clone at `/work`.
-5. Runs the onboarder interactively — elicitation requires the operator
-   in the loop, unlike planner/auditor which run autonomously.
-6. On discharge, restarts the architect container so it picks up
-   `briefs/onboarding/handover.md` on its next start.
+4. Infers target-language platforms from canonical signal files at the
+   source root, unless `--platforms=<csv>` was supplied (in which case
+   that set is authoritative; inference is skipped).
+5. **Phase 1.** Brings up an `onboarder` container interactively for
+   elicitation. Writes the migration brief
+   (`briefs/onboarding/code-migration.brief.md`) and a draft handover
+   (`briefs/onboarding/handover.draft.md`). Discharges.
+6. **Phase 2.** Runs `infra/scripts/dispatch-code-migration.sh`. The
+   code-migration agent composes its image with the declared platforms,
+   reads `/source`, runs survey probes per the brief's tool surface, and
+   commits the migration report
+   (`briefs/onboarding/code-migration.report.md`). Autonomous; no
+   operator-in-loop.
+7. **Phase 3.** Brings up a fresh `onboarder` container interactively
+   for findings integration. Reads the migration report and the draft
+   handover, writes the final `briefs/onboarding/handover.md`, discharges.
+8. Restarts the architect container so it picks up the handover on next
+   attach.
 
 See [`methodology/deployment-docker.md`](methodology/deployment-docker.md) §6.4
 for the full onboarding workflow.
@@ -424,7 +463,7 @@ project-template/
 ├── FINDINGS.md              ← substrate-internal (see note below)
 ├── docker-compose.yml       ← long-lived (git-server, architect) and
 │                              ephemeral-profile (planner, coder-daemon,
-│                              auditor, onboarder) services
+│                              auditor, onboarder, code-migration) services
 ├── setup-linux.sh           ← Linux + Crostini entry point
 ├── setup-mac.sh             ← macOS entry point
 ├── setup-common.sh          ← shared setup body
@@ -442,6 +481,7 @@ project-template/
 │   ├── coder-daemon/Dockerfile + entrypoint.sh + daemon.js + package.json
 │   ├── auditor/Dockerfile   + entrypoint.sh
 │   ├── onboarder/Dockerfile + entrypoint.sh
+│   ├── code-migration/Dockerfile + entrypoint.sh  ← s014: code migration agent
 │   ├── git-server/Dockerfile + entrypoint.sh + init-repos.sh +
 │   │                          git-shell-wrapper + hooks/update
 │   ├── keys/                ← per-role SSH keys (gitignored except .gitkeep)
@@ -451,6 +491,8 @@ project-template/
 │       ├── compose-image.sh            ← s013: JIT platform composition (hash-tagged role images)
 │       ├── resolve-platforms.sh        ← s013: section+TLP+s009-fallback resolution
 │       ├── validate-tool-surface.sh    ← s013: brief-declared binaries vs image PATH (F52 closure)
+│       ├── dispatch-code-migration.sh  ← s014: host-side dispatcher for the code-migration agent
+│       ├── infer-platforms.sh          ← s014: canonical signal-file inference for /source
 │       └── lib/
 │           ├── parse-tool-surface.sh   ← s011: section/audit-brief allowed-tools parser
 │           ├── parse-platforms.sh      ← s013: Required platforms / ## Platforms parser
@@ -488,9 +530,14 @@ project. They don't enter any role container's view at runtime.
 - **[`methodology/architect-guide.md`](methodology/architect-guide.md)** /
   **[`planner-guide.md`](methodology/planner-guide.md)** /
   **[`auditor-guide.md`](methodology/auditor-guide.md)** /
-  **[`onboarder-guide.md`](methodology/onboarder-guide.md)** — what each
-  role should do; loaded into their containers read-only at
-  `/methodology`.
+  **[`onboarder-guide.md`](methodology/onboarder-guide.md)** /
+  **[`code-migration-agent-guide.md`](methodology/code-migration-agent-guide.md)** —
+  what each role should do; loaded into their containers read-only at
+  `/methodology`. The migration-brief and migration-report templates
+  ([`code-migration-brief-template.md`](methodology/code-migration-brief-template.md),
+  [`code-migration-report-template.md`](methodology/code-migration-report-template.md))
+  are sibling references the onboarder and the code migration agent
+  both consume during brownfield onboarding.
 - **[`methodology/deployment-docker.md`](methodology/deployment-docker.md)** — the deployment design that the
   compose file and entrypoints implement.
 - **[`methodology/platforms/`](methodology/platforms)** — the platform
