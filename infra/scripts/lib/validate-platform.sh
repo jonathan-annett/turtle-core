@@ -85,7 +85,7 @@ if roles is None or not isinstance(roles, dict):
     err("'roles' is required and must be a mapping (may be empty: {})")
     roles = {}
 
-valid_role_names = {"coder-daemon", "auditor", "planner", "onboarder"}
+valid_role_names = {"coder-daemon", "auditor", "planner", "onboarder", "code-migration"}
 for role_name, role in roles.items():
     if role_name not in valid_role_names:
         err(f"roles.{role_name}: unknown role; must be one of {sorted(valid_role_names)}")

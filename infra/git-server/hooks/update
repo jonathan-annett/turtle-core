@@ -103,6 +103,35 @@ if [ "${repo}" = "main.git" ]; then
                 *) reject "onboarder may push only to refs/heads/main" ;;
             esac
             ;;
+        code-migration)
+            # s014 (Section B): the code migration agent is a sub-agent of
+            # the onboarder, dispatched once per project onboarding. It
+            # produces one artifact — the migration report at
+            # briefs/onboarding/code-migration.report.md. Unlike the
+            # onboarder (F57 — path-unrestricted because the onboarder
+            # touches both an import commit and a handover commit), the
+            # code-migration agent commits exactly one path; the hook can
+            # therefore enforce the path restriction strictly. Single-shot
+            # enforcement (one dispatch per onboarding) is at the
+            # dispatch-script level; this hook is defence in depth.
+            case "${ref}" in
+                refs/heads/main) ;;
+                *) reject "code-migration may push only to refs/heads/main" ;;
+            esac
+            seen_any=0
+            while IFS= read -r path; do
+                [ -z "${path}" ] && continue
+                seen_any=1
+                case "${path}" in
+                    briefs/onboarding/code-migration.report.md) ;;
+                    *) reject "code-migration may not modify '${path}' (allowed: briefs/onboarding/code-migration.report.md only)" ;;
+                esac
+            done < <(changed_paths)
+            if [ "${seen_any}" -eq 0 ]; then
+                reject "code-migration push must touch briefs/onboarding/code-migration.report.md (no file changes detected)"
+            fi
+            exit 0
+            ;;
         *)
             reject "unknown role '${user}'"
             ;;
@@ -115,7 +144,7 @@ elif [ "${repo}" = "auditor.git" ]; then
         architect)
             reject "architect has read-only access to the auditor repo (spec §3.2)"
             ;;
-        planner|coder|onboarder)
+        planner|coder|onboarder|code-migration)
             reject "${user} has no access to the auditor repo (spec §3.2)"
             ;;
         *)

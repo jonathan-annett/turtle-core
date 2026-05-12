@@ -59,7 +59,7 @@ fi
 
 if [ "$#" -ne 2 ]; then
     echo "Usage: $0 [--stdout] <role> <comma-platforms>" >&2
-    echo "  role        one of: coder-daemon, auditor, planner, onboarder" >&2
+    echo "  role        one of: coder-daemon, auditor, planner, onboarder, code-migration" >&2
     echo "  platforms   comma-separated platform names; 'default' allowed" >&2
     exit 1
 fi
@@ -68,8 +68,8 @@ ROLE="$1"
 PLATFORMS_CSV="$2"
 
 case "${ROLE}" in
-    coder-daemon|auditor|planner|onboarder) ;;
-    *) echo "render-dockerfile.sh: unknown role '${ROLE}' (expected coder-daemon, auditor, planner, or onboarder)" >&2; exit 1 ;;
+    coder-daemon|auditor|planner|onboarder|code-migration) ;;
+    *) echo "render-dockerfile.sh: unknown role '${ROLE}' (expected coder-daemon, auditor, planner, onboarder, or code-migration)" >&2; exit 1 ;;
 esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

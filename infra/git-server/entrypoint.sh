@@ -18,7 +18,7 @@ chmod 600 "${authorized}"
 ssh_options="no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding"
 
 found_any=0
-for role in architect planner coder auditor human onboarder; do
+for role in architect planner coder auditor human onboarder code-migration; do
     pubfile="/srv/keys/${role}/id_ed25519.pub"
     if [ -f "${pubfile}" ]; then
         keyline=$(tr -d '\n' < "${pubfile}")

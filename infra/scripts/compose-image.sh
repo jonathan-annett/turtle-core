@@ -10,7 +10,7 @@
 # Usage:
 #   compose-image.sh <role> <comma-platforms>
 #
-# Roles: coder-daemon, auditor, planner, onboarder.
+# Roles: coder-daemon, auditor, planner, onboarder, code-migration.
 # Platforms: comma-separated names matching methodology/platforms/<name>.yaml.
 #   Empty string, the literal "default", and duplicates are normalised
 #   away — the empty platform set produces a stable hash and a "no
@@ -49,7 +49,7 @@ if [ "$#" -ne 2 ]; then
     cat >&2 <<'EOF'
 Usage: compose-image.sh <role> <comma-platforms>
 
-  role        coder-daemon | auditor | planner | onboarder
+  role        coder-daemon | auditor | planner | onboarder | code-migration
   platforms   comma-separated platform names; '' or 'default' are
               equivalent to the empty set (no platform layers added).
 
@@ -62,9 +62,9 @@ ROLE="$1"
 PLATFORMS_CSV="$2"
 
 case "${ROLE}" in
-    coder-daemon|auditor|planner|onboarder) ;;
+    coder-daemon|auditor|planner|onboarder|code-migration) ;;
     *)
-        echo "compose-image: unknown role '${ROLE}' (expected coder-daemon, auditor, planner, or onboarder)" >&2
+        echo "compose-image: unknown role '${ROLE}' (expected coder-daemon, auditor, planner, onboarder, or code-migration)" >&2
         exit 1
         ;;
 esac

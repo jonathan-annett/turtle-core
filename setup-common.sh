@@ -79,6 +79,7 @@ mkdir -p \
     "${repo_root}/infra/keys/auditor"    \
     "${repo_root}/infra/keys/human"      \
     "${repo_root}/infra/keys/onboarder"  \
+    "${repo_root}/infra/keys/code-migration"  \
     "${repo_root}/briefs"                \
     "${repo_root}/.pairs"
 chmod 700 "${repo_root}/.pairs"

@@ -35,6 +35,25 @@ roles:
       - "uv --version"
       - "poetry --version"
       - "pytest --version"
+  # s014 (Section B): code-migration role block. The code migration
+  # agent performs structural review only — no test execution, no build
+  # — so the survey-grade probes (ruff for lint + undefined-name, mypy
+  # for type-check, pip for --dry-run dependency resolution) are the
+  # minimum useful toolchain. uv/poetry/pytest are deliberately omitted;
+  # add them per migration brief if a specific project's survey needs
+  # them.
+  code-migration:
+    apt: [python3, python3-venv]
+    install:
+      - "python3 -m venv /home/agent/.python-extras-venv"
+      - "/home/agent/.python-extras-venv/bin/pip install --no-cache-dir ruff mypy"
+    env:
+      PATH: "/home/agent/.python-extras-venv/bin:${PATH}"
+    verify:
+      - "python3 --version"
+      - "pip --version"
+      - "ruff --version"
+      - "mypy --version"
 defaults:
   test_runner: "pytest"
   build_command: ""

@@ -71,7 +71,7 @@ EOF
 fi
 
 
-roles=(architect planner coder auditor human onboarder)
+roles=(architect planner coder auditor human onboarder code-migration)
 
 # If running under sudo, return the keys to the invoking user so the
 # in-container 'agent' user (UID 1000, matching the typical host UID) can

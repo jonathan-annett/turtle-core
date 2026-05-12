@@ -192,6 +192,50 @@ services:
     tty: true
 
   # ---------------------------------------------------------------------------
+  # code-migration: ephemeral, project-onboarding-scoped, single-shot.
+  # Dispatched by the onboarder during brownfield onboarding via
+  # infra/scripts/dispatch-code-migration.sh. Performs structural review
+  # of /source and commits a survey report at
+  # briefs/onboarding/code-migration.report.md. Lives in the ephemeral
+  # profile alongside planner/coder-daemon/auditor/onboarder; no
+  # container_name so multiple invocations under different compose
+  # project namespaces don't collide (in practice the agent runs once
+  # per onboarding so collisions are unlikely, but the convention is the
+  # same as the other ephemeral roles).
+  # ---------------------------------------------------------------------------
+  code-migration:
+    build: ./infra/code-migration
+    # s014 (B.4): CODE_MIGRATION_IMAGE overrides the image tag at
+    # dispatch time. dispatch-code-migration.sh runs compose-image.sh
+    # to produce a hash-tagged image (`agent-code-migration-platforms:<hash>`)
+    # carrying the platforms declared in the migration brief's
+    # "Required platforms" field, then passes that tag here. Setup-time
+    # `docker compose build` leaves the env var unset and produces the
+    # default `agent-code-migration:latest` tag (the static template
+    # build, useful as a build-cache warmer).
+    image: ${CODE_MIGRATION_IMAGE:-agent-code-migration:latest}
+    profiles: ["ephemeral"]
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - claude-state-shared:/home/agent/.claude
+      - ./methodology:/methodology:ro
+      - ./infra/keys/code-migration:/home/agent/.ssh:ro
+      # /source — brownfield project tree (read-only). Same mount the
+      # onboarder used; the dispatch helper resolves SOURCE_PATH from
+      # the onboarder's context.
+      - ${SOURCE_PATH:-/dev/null}:/source:ro
+      # s011 11.e / B.3: shared "Required tool surface" parser, bash
+      # port of infra/coder-daemon/parse-tool-surface.js. The entrypoint
+      # calls this at bootstrap to translate the migration brief's field
+      # into --allowed-tools.
+      - ./infra/scripts/lib/parse-tool-surface.sh:/usr/local/lib/turtle-core/parse-tool-surface.sh:ro
+    networks:
+      - agent-net
+    stdin_open: true
+    tty: true
+
+  # ---------------------------------------------------------------------------
   # auditor: ephemeral, per audit. Started by audit.sh.
   # Built from Dockerfile.generated (s009; see coder-daemon comment).
   # ---------------------------------------------------------------------------
