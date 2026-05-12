@@ -41,6 +41,22 @@ If the field is missing or unparseable, the substrate fails clean before your cl
 
 Your tool surface is part of the audit's documented scope. Tight surfaces are good practice — both for security and for keeping audit work bounded.
 
+### `cd` vs `git -C`: which pattern matches which mount
+
+You operate across two mounts with different writability, and your tool surface will typically reflect this asymmetry:
+
+- **`/work` (read-only checkout of the section branch tip).** If the architect did their job, your surface grants `Bash(git -C /work log:*)`, `Bash(git -C /work diff:*)`, etc. — the absolute-path `git -C` form rather than `cd /work && git`. Use those exactly as granted; do not invent `cd /work` workarounds when an examination probe needs more. If you find your surface is missing a `git -C /work …` pattern you genuinely need, that is a "brief insufficient" condition — write the note into the auditor repo naming the missing pattern, do not paper over it with shell tricks.
+- **`/auditor` (your read-write workspace).** This is your natural cwd. Plain `cd /auditor` followed by ordinary `git add / commit / push` works because the clone is writable. Your surface will typically grant `Bash(cd:*)` and `Bash(git *:*)` here; use them straightforwardly.
+
+The asymmetry is not arbitrary. Some claude-code tool surfaces deny `Bash(cd:*)` into mounted read-only roots, and even where `cd` is allowed against `/work` it is fragile in ways that have bitten prior audits (F51 manifested twice with two different auditor-invented workarounds before the fix landed in the guides). Treat the `git -C` form on `/work` as the canonical pattern; treat `cd`-then-git as the natural shape only on `/auditor`.
+
+One-line examples:
+
+```bash
+git -C /work log --since='1 week ago' -- src/auth   # read-only inspection of main
+cd /auditor && git add reports/ && git commit -m '...'  # writing in your workspace
+```
+
 ## Your job
 
 - Evaluate the section against the brief's sign-off criteria.
