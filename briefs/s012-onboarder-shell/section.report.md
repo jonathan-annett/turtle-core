@@ -123,13 +123,13 @@ The template treats each as a "must contain" specification rather than a fillabl
 
 ## Notable findings
 
-### F52 — onboarder import needs an explicit chown after `cp -a`
+### F54 — onboarder import needs an explicit chown after `cp -a`
 
 `cp -a /source/. .` preserves the host user's UID (typically 1000) on the copied files. The import temp-clone is created inside a `docker run --rm debian:bookworm-slim` running as root by default, so the temp dir is root-owned but the copied files are 1000-owned. Without a normalising `chown -R root:root .` step before `git add`, git rejects the working tree with `fatal: detected dubious ownership in repository`. Caught during A.7 test development. Fix lives in both `onboard-project.sh` and `infra/scripts/tests/test-onboarder-shell.sh`.
 
 Forward implication: if a future section moves the import step into the onboarder container itself (running as the agent user, UID 1000), this concern reverses — the container's UID matches the source's UID and no chown is needed. The choice of where the import runs is the only handle here; the chown is a host-side artefact.
 
-### F53 — architect /work staleness on long-running architect
+### F55 — architect /work staleness on long-running architect
 
 The architect container is long-lived. Setup brings it up; the operator may not attach for hours or days. Meanwhile `onboard-project.sh` pushes the handover to main. Without intervention, the architect's `/work` clone is stale — the entrypoint check for `briefs/onboarding/handover.md` would never see the new file.
 
@@ -137,7 +137,7 @@ Resolved in s012 by two coordinated changes: the architect entrypoint runs `git 
 
 The `--ff-only` is intentional: if `/work` has diverged from origin (an architect that committed local-only briefs while disconnected from git-server), the pull will fail loudly with a warning rather than silently merging. The warning is printed; the entrypoint proceeds. This is conservative — it surfaces a real anomaly without blocking startup.
 
-### F54 — onboarder bootstrap is interactive, divergent from planner/auditor
+### F56 — onboarder bootstrap is interactive, divergent from planner/auditor
 
 The planner and auditor entrypoints use `claude -p "${BOOTSTRAP_PROMPT}" --permission-mode dontAsk --allowed-tools ...` (non-interactive, print-mode). The onboarder uses `claude "${BOOTSTRAP_PROMPT}" --permission-mode dontAsk --allowed-tools ...` (no `-p` — interactive, prompt seeds the session). This is deliberate: the planner/auditor work without a human in the loop, but the onboarder's elicitation phase **requires** the operator to be in the conversation. The architect's first-attach bootstrap uses the same non-`-p` shape for the same reason.
 
@@ -145,13 +145,13 @@ The brief said "follows the s008 self-bootstrapping pattern". This phrasing cove
 
 Implication for any future test author: the stub-claude pattern needs a tiny generalisation — accept the prompt as `$1` (when invoked non-`-p`) OR as `$2` (when invoked with `-p "<prompt>"`). The s007/s008 stubs handled `-p` only; the s012 test handles non-`-p` only; a future "test all roles in one harness" would dispatch on $1.
 
-### F55 — single-shot enforcement is script-level, not hook-level
+### F57 — single-shot enforcement is script-level, not hook-level
 
 The git-server's `update` hook permits the `onboarder` role to push to `refs/heads/main` without path restriction. Single-shot is enforced by `./onboard-project.sh` inspecting `main.git`'s commit count before any state mutation; the hook is a fallback for accidental misuse, not the policy boundary. This is deliberate: a path-based hook rule cannot distinguish the import commit (touches source-tree paths) from the handover commit (touches `briefs/onboarding/handover.md`) without coupling the hook to onboarding semantics. The hook stays simple; the policy lives in one obvious place.
 
 A.7 phase 10 verifies the script-level enforcement end-to-end against the scratch substrate.
 
-### F56 — onboarder allowed-tools list is embedded, not brief-parsed
+### F58 — onboarder allowed-tools list is embedded, not brief-parsed
 
 s011 introduced the "Required tool surface" → `--allowed-tools` plumbing for planners and auditors, parsing the surface from the section/audit brief at commission time. The onboarder has no section brief — it's commissioned by `./onboard-project.sh` and is a project-scoped, not section-scoped, role. Its tool-surface needs are invariant across project types and runs (read /source + /methodology, write /work/briefs/onboarding/, git ops against main, lightweight shell inspection), so embedding a curated allow-list in the entrypoint is correct here.
 
