@@ -1,19 +1,41 @@
 #!/bin/bash
 # onboard-project.sh <source-path> [--type 1|2|3|4] [--intake-file <path>]
+#                                  [--platforms <csv>]
 #
-# Operator-facing entry point for the onboarder (s012). Mints the
-# brownfield project's main.git on the substrate's git-server, imports
-# the source tree as the initial commit, then runs the onboarder
-# container so the operator and claude-code produce the handover brief
-# interactively. Single-shot: refuses to run a second time for the same
-# project (enforced by inspecting the bare main.git on the git-server).
+# Operator-facing entry point for the onboarder. Mints the brownfield
+# project's main.git on the substrate's git-server, imports the source
+# tree as the initial commit, then drives a three-phase onboarding:
 #
-# Sibling of ./commission-pair.sh and ./audit.sh; same dual-mode flavor
-# applied to a different role.
+#   Phase 1 (s012): the onboarder elicits operator priorities and
+#                   unknowns interactively, confirms or corrects the
+#                   inferred platform set, writes the migration brief
+#                   for the code migration agent, and writes a draft
+#                   handover at briefs/onboarding/handover.draft.md
+#                   with section 3 (code structural review) left as a
+#                   TODO placeholder. Onboarder discharges.
+#
+#   Phase 2 (s014): the host dispatches the code migration agent via
+#                   infra/scripts/dispatch-code-migration.sh. The agent
+#                   reads its commissioning brief, performs structural
+#                   survey on /source, and commits the migration
+#                   report. No operator interaction during this phase.
+#
+#   Phase 3 (s014): the onboarder re-runs against the migration report
+#                   and the draft handover. It integrates the report's
+#                   findings into section 3, writes the final handover
+#                   at briefs/onboarding/handover.md, and discharges.
+#                   The architect's first-attach detection keys on this
+#                   final file.
+#
+# Single-shot: refuses to run a second time for the same project
+# (enforced by inspecting the bare main.git on the git-server).
+#
+# Sibling of ./commission-pair.sh and ./audit.sh.
 #
 # Args:
 #   <source-path>           Directory containing the brownfield project.
-#                           Mounted into the onboarder read-only at /source.
+#                           Mounted into the onboarder and the code
+#                           migration agent read-only at /source.
 #                           Required.
 #   --type 1|2|3|4          Optional project-type hint (see the four-type
 #                           taxonomy in methodology/onboarder-guide.md §4).
@@ -21,11 +43,22 @@
 #   --intake-file <path>    Optional file with operator-supplied initial
 #                           context (notes, priorities, links). Mounted
 #                           into the onboarder at /onboarding-intake.md.
+#   --platforms <csv>       Optional comma-separated platform list (e.g.
+#                           "python-extras,node-extras"). When supplied,
+#                           skips platform inference and uses exactly
+#                           this set in the migration brief. Power-user
+#                           fast path; default is inference + operator
+#                           confirmation during phase-1 elicitation.
+#                           Independent of --type: --type taxonomises
+#                           the source-material kind (code only / +notes
+#                           / +history / +methodology); --platforms
+#                           declares target-language toolchains.
 #
 # Env overrides (test fixture surface; production callers leave unset):
 #   ARCHITECT_CONTAINER     Default agent-architect.
 #   GIT_SERVER_CONTAINER    Default agent-git-server.
 #   ONBOARD_COMPOSE_PROJECT Default <repo-basename>-onboard.
+#   DISPATCH_COMPOSE_PROJECT  Default <repo-basename>-code-migration.
 
 set -euo pipefail
 
@@ -38,18 +71,32 @@ cd "${repo_root}"
 usage() {
     cat <<'EOF'
 Usage: ./onboard-project.sh <source-path> [--type 1|2|3|4] [--intake-file <path>]
+                            [--platforms <csv>]
 
   <source-path>         Directory containing the brownfield project. Mounted
-                        read-only into the onboarder at /source.
+                        read-only into the onboarder and the code migration
+                        agent at /source.
 
   --type 1|2|3|4        Optional project-type hint. The onboarder infers
                         from /source if you omit this; pass it when the
                         type is unambiguous and you want to skip that step.
+                        Type taxonomises the source-material kind (1 code
+                        only / 2 +notes / 3 +history / 4 +methodology).
+                        Independent of --platforms.
 
   --intake-file <path>  Optional markdown file with your initial framing
                         (goals, priorities, hard constraints, things you
                         want the architect to know on day one). Mounted at
                         /onboarding-intake.md inside the onboarder.
+
+  --platforms <csv>     Optional comma-separated platform list (e.g.
+                        "python-extras,node-extras"). When supplied, skips
+                        platform inference and uses exactly this set in
+                        the migration brief commissioned to the code
+                        migration agent. Power-user fast path; default is
+                        inference from canonical signal files at the
+                        source root, followed by operator confirmation
+                        during phase-1 elicitation. Independent of --type.
 
   -h, --help            Show this help.
 
@@ -59,12 +106,15 @@ onboarding is single-shot per project.
 
 Example:
     ./onboard-project.sh ~/code/legacy-thing --type 2 --intake-file ~/onboarding-notes.md
+    ./onboard-project.sh ~/code/polyglot-thing --platforms python-extras,node-extras
 EOF
 }
 
 source_path=""
 type_hint="unknown"
 intake_file=""
+platforms_override=""
+platforms_override_present=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -77,6 +127,10 @@ while [ $# -gt 0 ]; do
             [ $# -ge 2 ] || { echo "onboard-project.sh: --intake-file needs an argument" >&2; exit 2; }
             intake_file="$2"; shift 2 ;;
         --intake-file=*) intake_file="${1#--intake-file=}"; shift ;;
+        --platforms)
+            [ $# -ge 2 ] || { echo "onboard-project.sh: --platforms needs an argument" >&2; exit 2; }
+            platforms_override="$2"; platforms_override_present=1; shift 2 ;;
+        --platforms=*) platforms_override="${1#--platforms=}"; platforms_override_present=1; shift ;;
         --*)
             echo "onboard-project.sh: unknown flag: $1" >&2
             usage >&2; exit 2 ;;
@@ -248,11 +302,27 @@ fi
 echo "Source import complete."
 
 # ---------------------------------------------------------------------------
-# Build the canonical onboarder bootstrap prompt. This becomes the
-# methodology's reference prompt for onboarder commissioning, parallel to
-# the planner/auditor prompts canonicalised in s008's report.
+# Platform inference (s014 B.6 / design call 1).
+#
+# Default path: walk canonical signal files at the source root and
+# propose a platform set. The operator confirms or corrects during
+# phase-1 elicitation. Override path: --platforms=<csv> supplied → skip
+# inference and pass the operator's set through to the migration brief
+# directly (design call 2).
 # ---------------------------------------------------------------------------
-bootstrap_prompt="Read /methodology/onboarder-guide.md (symlinked as /work/CLAUDE.md) and /methodology/onboarder-handover-template.md. The brownfield source materials are at /source (read-only); they have already been imported into /work as the initial commit. Your project type hint is: ${type_hint}. Operator-supplied initial context (if any) is at /onboarding-intake.md (a zero-length or absent file means none was provided). Synthesise the project, elicit priorities and unknowns from the operator interactively, and produce the handover brief at /work/briefs/onboarding/handover.md following the nine-section structure in the template. When the operator is satisfied with the handover, commit with the exact message 'onboarding: handover brief', push to origin main, and discharge."
+if [ "${platforms_override_present}" -eq 1 ]; then
+    inferred_csv="${platforms_override}"
+    inferred_source="--platforms flag"
+    echo "[onboard] platforms supplied via --platforms: ${inferred_csv:-(empty)}"
+else
+    inferred_csv=$("${repo_root}/infra/scripts/infer-platforms.sh" "${source_path_abs}")
+    inferred_source="inference from /source signals"
+    if [ -n "${inferred_csv}" ]; then
+        echo "[onboard] inferred platforms from /source: ${inferred_csv}"
+    else
+        echo "[onboard] no platforms inferred from /source signals; the onboarder will elicit from the operator."
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # Bring up the onboarder under its own compose project so it doesn't
@@ -262,6 +332,7 @@ bootstrap_prompt="Read /methodology/onboarder-guide.md (symlinked as /work/CLAUD
 # ---------------------------------------------------------------------------
 project_base="$(basename "${repo_root}")"
 project="${ONBOARD_COMPOSE_PROJECT:-${project_base}-onboard}"
+export DISPATCH_COMPOSE_PROJECT="${DISPATCH_COMPOSE_PROJECT:-${project_base}-code-migration}"
 
 cleanup() {
     echo
@@ -290,20 +361,150 @@ if ! onboarder_image=$("${repo_root}/infra/scripts/compose-image.sh" onboarder "
 fi
 export ONBOARDER_IMAGE="${onboarder_image}"
 
-echo "Commissioning onboarder (project=${project})..."
+# ---------------------------------------------------------------------------
+# Phase 1 — onboarder elicits, writes migration brief and draft handover.
+#
+# The phase-1 prompt directs the operator-in-loop session to:
+#   - confirm or correct the inferred platform set;
+#   - author /work/briefs/onboarding/code-migration.brief.md per the
+#     migration-brief template;
+#   - author /work/briefs/onboarding/handover.draft.md per the
+#     onboarder-handover-template, with section 3 (code structural
+#     review) marked as a TODO placeholder for phase 3 to fill from
+#     the migration report;
+#   - commit both files with the message documented below; push;
+#     discharge.
+#
+# The draft path is distinct from the canonical handover.md so the
+# architect's first-attach detection (s012 A.6) does not fire
+# prematurely. Phase 3 produces handover.md.
+# ---------------------------------------------------------------------------
+bootstrap_prompt_phase_1="Read /methodology/onboarder-guide.md (symlinked as /work/CLAUDE.md), /methodology/onboarder-handover-template.md, and /methodology/code-migration-brief-template.md.
+
+The brownfield source materials are at /source (read-only); they have already been imported into /work as the initial commit. Your project type hint is: ${type_hint}. Operator-supplied initial context (if any) is at /onboarding-intake.md (a zero-length or absent file means none was provided).
+
+Proposed platform set (from ${inferred_source}): \"${inferred_csv}\". Confirm or correct this with the operator during your elicitation pass; the confirmed set goes in the migration brief's Required platforms field.
+
+THIS IS PHASE 1 OF THREE. Your tasks for this phase:
+
+1. Synthesise the project from /source and the operator's intake.
+2. Elicit operator priorities and unknowns interactively (the same elicitation loop as in the onboarder guide, batched 2-3 questions at a time).
+3. Confirm or correct the proposed platform set with the operator.
+4. Author /work/briefs/onboarding/code-migration.brief.md per /methodology/code-migration-brief-template.md. Required platforms must reflect the confirmed set. Required tool surface must match the platforms (e.g. python-extras → \"Bash(pip:*),Bash(ruff:*),Bash(mypy:*),Bash(python3:*)\" plus the survey staples for any other declared platform).
+5. Author /work/briefs/onboarding/handover.draft.md per /methodology/onboarder-handover-template.md, with sections 1, 2, 4, 5, 6, 7, 8, 9 fully drafted. Section 3 (\"Code structural review\") must contain exactly this single placeholder line and nothing else:
+       _TODO: code migration agent dispatching — phase 3 fills this in from the migration report._
+6. Commit both files with the message 'onboarding: phase 1 — migration brief + draft handover'. Push to origin main. Discharge.
+
+After you discharge, the host will dispatch the code migration agent (autonomous, no operator interaction). When the agent's migration report is committed, the host will re-invoke a fresh onboarder container for phase 3 — at which point your phase-1 work (this draft handover) and the migration report together produce the final handover.md."
+
+echo "Commissioning onboarder PHASE 1 (project=${project})..."
 echo
 
 SOURCE_PATH="${source_path_abs}" \
 INTAKE_FILE="${intake_file_abs:-/dev/null}" \
 ONBOARDING_TYPE_HINT="${type_hint}" \
-BOOTSTRAP_PROMPT="${bootstrap_prompt}" \
+BOOTSTRAP_PROMPT="${bootstrap_prompt_phase_1}" \
     docker compose -p "${project}" --profile ephemeral run --rm \
         -e BOOTSTRAP_PROMPT \
         -e ONBOARDING_TYPE_HINT \
         onboarder
 
-# After the onboarder discharges (claude exits, then bash -l exits when
-# the operator hits Ctrl-D or types `exit`), restart the architect so its
+# Verify the migration brief and draft handover landed on main before
+# proceeding to dispatch. The architect's /work clone is the
+# verification surface (mirror check-brief.sh's pattern).
+echo
+echo "[onboard] verifying phase 1 outputs on origin/main..."
+docker exec "${arch_container}" git -C /work fetch -q origin main 2>/dev/null || true
+for required in "briefs/onboarding/code-migration.brief.md" "briefs/onboarding/handover.draft.md"; do
+    if ! docker exec "${arch_container}" git -C /work cat-file -e "origin/main:${required}" 2>/dev/null; then
+        cat >&2 <<EOF
+
+onboard-project.sh: FATAL — phase 1 did not produce ${required} on origin/main.
+
+The onboarder may have discharged early, or its push may not have
+landed. Either re-run ./onboard-project.sh from scratch (tear down and
+re-create the substrate first — single-shot enforcement will block
+in-place retries) or inspect ${arch_container}'s /work to recover.
+EOF
+        exit 1
+    fi
+done
+echo "[onboard] phase 1 outputs present: code-migration.brief.md, handover.draft.md."
+
+# ---------------------------------------------------------------------------
+# Phase 2 — host dispatches the code migration agent (autonomous).
+#
+# The dispatch helper composes the agent's image with the platforms
+# declared in the migration brief, validates the brief's tool surface
+# against the composed image, runs the agent container with /source
+# mounted read-only, and blocks until the agent commits the migration
+# report and discharges.
+# ---------------------------------------------------------------------------
+echo
+echo "[onboard] PHASE 2: dispatching code migration agent..."
+echo
+
+SOURCE_PATH="${source_path_abs}" \
+ARCHITECT_CONTAINER="${arch_container}" \
+GIT_SERVER_CONTAINER="${git_container}" \
+    "${repo_root}/infra/scripts/dispatch-code-migration.sh"
+
+# ---------------------------------------------------------------------------
+# Phase 3 — onboarder integrates findings, writes final handover.
+#
+# A fresh onboarder container reads the draft handover (phase 1) and
+# the migration report (phase 2), integrates the report's findings into
+# section 3, and commits the final handover at the canonical path
+# briefs/onboarding/handover.md. The architect's first-attach detection
+# keys on this file.
+# ---------------------------------------------------------------------------
+bootstrap_prompt_phase_3="Read /methodology/onboarder-guide.md (symlinked as /work/CLAUDE.md), /methodology/onboarder-handover-template.md, /methodology/code-migration-report-template.md, and the following project files (all in /work):
+
+  - /work/briefs/onboarding/handover.draft.md (your phase-1 work)
+  - /work/briefs/onboarding/code-migration.brief.md (the agent's commissioning brief)
+  - /work/briefs/onboarding/code-migration.report.md (the agent's structural survey report; survey feedstock — not a gate)
+
+THIS IS PHASE 3 OF THREE. Your tasks for this phase:
+
+1. Integrate the migration report's findings into section 3 (\"Code structural review\") of the handover. Summarise the report's per-component intent, structural completeness, and findings such that an architect reading the handover gets the structural picture in one pass; reference the migration report by path for deeper reads. Severity-graded findings carry across (HIGH/LOW/INFO; framed for-architect's-attention, not gate-shaped).
+2. If the migration report surfaces operational notes or open questions that warrant updates to other handover sections (e.g. a vendored upstream that the operator did not mention in phase 1 should be added to §9 carry-over hazards), integrate those too. Do not duplicate the report wholesale — the report is preserved on disk; reference it.
+3. Produce /work/briefs/onboarding/handover.md as the FINAL handover (copy the draft, fill section 3, integrate any new context). Use the exact heading wording in /methodology/onboarder-handover-template.md — the architect's first-attach entrypoint scans for those headings.
+4. Briefly review the final handover with the operator if they ask; the elicitation pass already happened in phase 1, so this should be a confirmation step, not another full pass.
+5. Commit /work/briefs/onboarding/handover.md with the exact message 'onboarding: handover brief'. Push to origin main. Discharge.
+
+The architect's first-attach detection keys on the canonical handover.md filename; once it lands on main, the next ./attach-architect.sh will seed the architect's first claude session against the handover."
+
+echo
+echo "Commissioning onboarder PHASE 3 (project=${project})..."
+echo
+
+SOURCE_PATH="${source_path_abs}" \
+INTAKE_FILE="${intake_file_abs:-/dev/null}" \
+ONBOARDING_TYPE_HINT="${type_hint}" \
+BOOTSTRAP_PROMPT="${bootstrap_prompt_phase_3}" \
+    docker compose -p "${project}" --profile ephemeral run --rm \
+        -e BOOTSTRAP_PROMPT \
+        -e ONBOARDING_TYPE_HINT \
+        onboarder
+
+# Verify the final handover landed on main.
+echo
+echo "[onboard] verifying phase 3 output on origin/main..."
+docker exec "${arch_container}" git -C /work fetch -q origin main 2>/dev/null || true
+if ! docker exec "${arch_container}" git -C /work cat-file -e "origin/main:briefs/onboarding/handover.md" 2>/dev/null; then
+    cat >&2 <<EOF
+
+onboard-project.sh: WARNING — phase 3 did not produce
+briefs/onboarding/handover.md on origin/main.
+
+The architect's first-attach detection will not fire without this file.
+Inspect ${arch_container}'s /work to diagnose, or re-run phase 3
+manually by re-invoking the onboarder against the existing draft and
+migration report.
+EOF
+fi
+
+# After all three phases complete, restart the architect so its
 # entrypoint runs again with the just-pushed handover present in /work.
 # The entrypoint pulls /work on every start (see infra/architect/
 # entrypoint.sh, "s012 A.6: refresh /work on every entrypoint run"), so

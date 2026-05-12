@@ -59,18 +59,22 @@ A short preamble before section 1 is fine — typically two or three lines stati
 
 ## Section 3 — Code structural review
 
-**Purpose.** Hold the slot for the **code migration agent**'s findings (Section B of the substrate plan). The code migration agent will perform structural review against the target platform's toolchain — entry points, module boundaries, dependency surface, build/test invocation, suspected complexity hot spots.
+**Purpose.** Hold the **code migration agent**'s findings. The code migration agent performs structural review against the target platform's toolchain — entry points, module boundaries, dependency surface, declared-dependency resolution, suspected complexity hot spots — and produces a survey report at `briefs/onboarding/code-migration.report.md`. Phase 3 of the onboarder reads that report and integrates its findings into this section.
 
-**In the current substrate (Section A only):** the code migration agent does not exist. Fill this section with:
-- An operator-acknowledged note: "No automated code migration review run; sub-agent ships in Section B."
-- Whatever you noticed during your read-through — entry points you identified, obvious module boundaries, dependency files (`go.mod`, `package.json`, `requirements.txt`, `Cargo.toml`, etc.) and their headline contents, anything that looked structurally interesting.
+**Phase-1 draft state.** Section 3 of `handover.draft.md` is a single placeholder line (`_TODO: code migration agent dispatching — phase 3 fills this in from the migration report._`). Do not draft content into it during phase 1; phase 3 reads the placeholder and replaces it. The placeholder also lets a reader of the draft see that phase 3 is pending and the draft is not the final handover.
 
-Mark each unverified observation with a confidence qualifier ("appears to be", "is likely") so the architect — and the future code migration agent — knows what was eyeballed vs. what was deeply analysed.
+**Phase-3 fill-in.** In phase 3, replace the placeholder with a summary of the migration report:
+- **Per-component intent.** One bullet per top-level subtree the agent inspected: inferred purpose, language(s), apparent state. Lift these from the report's §2.
+- **Structural completeness.** Headline outcome of the agent's probes (import graph closure, dependency resolution, orphans, dangling references, stale directories) from the report's §3. Short — the report has detail.
+- **Findings.** The agent's severity-graded findings (HIGH / LOW / INFO; framed for-architect's-attention, not gate-shaped) from the report's §4. Carry each one across with its location, evidence pointer, and suggested next-step framing.
+- **Reference.** A trailing pointer to `briefs/onboarding/code-migration.report.md` for deeper reads. The report is preserved on disk indefinitely; do not duplicate it wholesale.
 
-**Length guide.** Type 1 + Section A-only substrate: half a page is plenty. Once the code migration agent ships, expect this to grow.
+If the migration report's operational notes (§5) or open questions (§6) cross-reference into other handover sections (e.g. a vendored upstream → §9 carry-over hazards, an inferred decision → §5 SHARED-STATE.md candidate), integrate those during phase-3 cross-integration.
 
-**Good content.** "Entry point appears to be `cmd/server/main.go`; the `internal/` tree holds five subsystems (`auth`, `db`, `http`, `jobs`, `metrics`)." Concrete pointers the architect can verify in seconds.
-**Bad content.** A code review. You are not auditing or reviewing implementation quality. Pointers + observations only.
+**Length guide.** Half a page to a page, depending on what the migration report surfaced. Long enough that the architect gets the structural picture from the handover alone; short enough that the report (not this section) carries the full detail.
+
+**Good content.** "The agent surveyed five top-level subtrees and surfaced one HIGH finding (typo'd dependency `requestz` at `requirements.txt:14`, likely `requests`) and two LOW findings (orphan files in `tools/legacy/` — operator confirmed deliberate, see §9). Full report at `briefs/onboarding/code-migration.report.md`."
+**Bad content.** A code review. The agent surveys structure; section 3 summarises that survey. Pointers + headline findings only.
 
 ---
 
