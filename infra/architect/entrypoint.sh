@@ -37,6 +37,17 @@ cd /
 if [ ! -d /work/.git ]; then
     echo "Cloning main.git into /work..."
     git clone git@git-server:/srv/git/main.git /work
+else
+    # s012 A.6: refresh /work on every entrypoint run. The architect's
+    # /work is a persistent named volume; without this pull, a handover
+    # brief pushed to main while the architect was running (the brownfield
+    # onboarding flow — onboarder runs while architect is idle, then
+    # operator restarts architect to attach) would not be visible in
+    # /work and the handover-detection block below would never fire.
+    # --ff-only because the architect must not silently absorb diverged
+    # history; if a real conflict appears it should surface here.
+    git -C /work pull --ff-only --quiet || \
+        echo "warning: 'git pull --ff-only' in /work failed; the architect's clone may be ahead of, or diverged from, origin/main."
 fi
 
 if [ ! -d /auditor/.git ]; then

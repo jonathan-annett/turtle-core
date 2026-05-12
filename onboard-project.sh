@@ -279,7 +279,30 @@ BOOTSTRAP_PROMPT="${bootstrap_prompt}" \
         onboarder
 
 # After the onboarder discharges (claude exits, then bash -l exits when
-# the operator hits Ctrl-D or types `exit`), print the next-step pointer.
+# the operator hits Ctrl-D or types `exit`), restart the architect so its
+# entrypoint runs again with the just-pushed handover present in /work.
+# The entrypoint pulls /work on every start (see infra/architect/
+# entrypoint.sh, "s012 A.6: refresh /work on every entrypoint run"), so
+# this restart is what makes the architect see briefs/onboarding/handover.md
+# and trigger the first-attach bootstrap on the operator's next
+# ./attach-architect.sh call. The architect is idle at this point in
+# the brownfield flow (no claude session yet) so the restart is safe.
+echo
+echo "Restarting ${arch_container} so the next ./attach-architect.sh sees the handover..."
+docker restart "${arch_container}" >/dev/null
+
+# Wait briefly for the architect to come back; the entrypoint logs its
+# banner when ready, but a slow start would leave the operator confused
+# if they ran ./attach-architect.sh too quickly. A short busy-wait keeps
+# this responsive without sleeping unconditionally.
+for _ in $(seq 1 30); do
+    if docker exec "${arch_container}" test -L /work/CLAUDE.md 2>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+
+# Print the next-step pointer.
 cat <<'EOF'
 
 ================================================================================
