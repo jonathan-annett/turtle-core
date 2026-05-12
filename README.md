@@ -7,10 +7,11 @@ The hierarchical agent orchestration substrate — all the way down.
 
 Reusable infrastructure for the methodology described in
 [`methodology/agent-orchestration-spec.md`](methodology/agent-orchestration-spec.md)
-(v2.1). Clone this repo, run a single setup script, and you have a working
+(v2.3). Clone this repo, run a single setup script, and you have a working
 substrate: a long-lived **architect** container, a private **git-server**
 hosting two bare repos, and the ability to spin up ephemeral
-**planner+coder-daemon** pairs and **auditors** on demand.
+**planner+coder-daemon** pairs, **auditors**, and (for brownfield migrations)
+the single-shot **onboarder** on demand.
 
 The methodology, role guides, and Docker deployment design are all in the
 [`methodology/`](methodology/) directory — the substrate exists to satisfy
@@ -30,6 +31,7 @@ After running setup, you have:
 | `planner` | ephemeral, per section | Started by `commission-pair.sh`. Decomposes a section into task briefs, commissions coders. |
 | `coder-daemon` | ephemeral, paired with planner | HTTP service on the agent network. Spawns claude-code subshells (one at a time) on the planner's command. |
 | `auditor` | ephemeral, per audit | Started by `audit.sh`. Read-only on `main`, read+write on `auditor.git`. Adversarial. |
+| `onboarder` | ephemeral, per project (single-shot) | Started by `onboard-project.sh` for **brownfield migrations only**. Reads source materials at `/source` (read-only), elicits operator priorities interactively, produces `briefs/onboarding/handover.md`. Greenfield projects skip it. |
 
 All containers run as the unprivileged `agent` user. Per-role SSH keys are
 generated locally and never committed.
@@ -200,6 +202,8 @@ gives the agent unrestricted SSH access with that user's
 privileges — see `methodology/deployment-docker.md §11` for the
 full model and the `--add-remote-host` runtime-extension pathway.
 
+### Greenfield path
+
 From there you and the architect produce `TOP-LEVEL-PLAN.md`, draft the
 first section brief, commit it, and exit. Then:
 
@@ -207,6 +211,36 @@ first section brief, commit it, and exit. Then:
 ./commission-pair.sh <section-slug>     # planner + coder-daemon
 ./audit.sh           <section-slug>     # auditor for the audit step
 ```
+
+### Brownfield path (migrating an existing project)
+
+If your project already has code (and possibly docs, agent transcripts,
+or an informal methodology in use), run the onboarder once, before the
+first architect attach:
+
+```bash
+./onboard-project.sh <path-to-existing-project> [--type 1|2|3|4] [--intake-file <notes.md>]
+```
+
+The onboarder mounts your source tree at `/source` (read-only), imports
+it as the initial commit on `main`, and starts an interactive claude
+session in which it synthesises project understanding and elicits your
+priorities through a few rounds of targeted questions. When you're
+satisfied with the synthesis, it commits `briefs/onboarding/handover.md`
+and discharges. Single-shot per project — re-running on the same
+substrate is refused. Then:
+
+```bash
+./attach-architect.sh
+```
+
+The architect's entrypoint detects the handover (and the absence of any
+existing `SHARED-STATE.md`) and seeds its first claude session against
+it — you skip the blank-slate phase and start from the onboarder's
+synthesis. From there the lifecycle is identical to the greenfield path.
+
+See `methodology/deployment-docker.md §6.4` and
+`methodology/onboarder-guide.md` for the full onboarding model.
 
 ---
 
@@ -543,18 +577,20 @@ project-template/
 ├── verify.sh                ← smoke test + creds-refresh helper
 ├── commission-pair.sh       ← start a planner+coder-daemon for one section
 ├── audit.sh                 ← start an auditor for one section
+├── onboard-project.sh       ← start an onboarder for brownfield migration (single-shot per project)
 ├── attach-architect.sh      ← convenience wrapper for `docker compose attach`
 ├── infra/
 │   ├── base/Dockerfile
-│   ├── architect/Dockerfile + entrypoint.sh
-│   ├── planner/Dockerfile   + entrypoint.sh
+│   ├── architect/Dockerfile  + entrypoint.sh
+│   ├── planner/Dockerfile    + entrypoint.sh
 │   ├── coder-daemon/Dockerfile + entrypoint.sh + daemon.js + package.json
-│   ├── auditor/Dockerfile   + entrypoint.sh
+│   ├── auditor/Dockerfile    + entrypoint.sh
+│   ├── onboarder/Dockerfile  + entrypoint.sh
 │   ├── git-server/Dockerfile + entrypoint.sh + init-repos.sh +
 │   │                          git-shell-wrapper + hooks/update
 │   ├── keys/                ← per-role SSH keys (gitignored except .gitkeep)
 │   └── scripts/generate-keys.sh
-├── methodology/             ← spec, architect-guide, planner-guide, auditor-guide
+├── methodology/             ← spec, role guides (architect, planner, auditor, onboarder), handover template
 ├── briefs/                  ← runtime: section/task briefs and reports
 ├── .pairs/                  ← runtime: per-pair env files (gitignored)
 ├── .gitignore

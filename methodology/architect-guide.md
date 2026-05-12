@@ -2,7 +2,7 @@
 
 A lean view for the persistent agent paired with the human. This guide includes only what the architect needs to do its job. The internal mechanics of how planners decompose sections, how coders execute tasks, and how auditors design probes are deliberately omitted — that is noise to the architect's context window.
 
-This guide is a derivative of the canonical methodology spec (v2.2). When the spec changes, regenerate this view from it. Do not hand-edit.
+This guide is a derivative of the canonical methodology spec (v2.3). When the spec changes, regenerate this view from it. Do not hand-edit.
 
 ---
 

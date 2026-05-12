@@ -2,6 +2,8 @@
 
 A generic, project-agnostic methodology for executing software projects with AI agents. One human and one persistent overseer agent share full context; everything else is an ephemeral specialist commissioned for one job.
 
+**Version 2.3.** Onboarder role added for brownfield-project migration. A new pre-architect, single-shot, project-scoped role ingests existing source materials, elicits operator priorities interactively, and produces a handover brief at `/briefs/onboarding/handover.md` that the architect adopts on its first attach (see §4 "Onboarder" and §8 step 0). Greenfield projects skip the onboarder. This version also makes explicit the foundational principle that **the architect is the only role with persistent context across a project** — planners, coders, and auditors begin each assignment with a clean window (see §4 "Architect"); the onboarder exists specifically to ease the only role onboarding can ease.
+
 **Version 2.2.** Tool-surface mechanism extended symmetrically up the role hierarchy: section briefs (architect → planner) and audit briefs (architect → auditor) now carry a "Required tool surface" field with the same shape and semantics as the task-brief field already specified in §7.3. The substrate translates each brief's field into the receiving role's `--allowedTools` at commission time; absent or unparseable → fail clean. See §7.2, §7.6, §9.
 
 **Version 2.1.** Substrate model revised: when all agents run on a shared host (typical for VPS, local-server, or laptop deployments), the methodology uses a single git substrate with role-isolated boundaries, and the Drive layer is dropped. Three deployment variants (Docker, linux users, cloud-Drive legacy) are described in §3.4–§3.6, satisfying the per-role access table in §3.3.
@@ -62,6 +64,7 @@ This is the durable, diff-able trail. Briefs sit next to the code that fulfilled
 | `planner` | main repo (all paths) | main repo: `section/*` and `task/*` branches only. May not push to `main`. |
 | `coder` | main repo (all paths within their assigned section branch) | main repo: their assigned `task/*` branch only. |
 | `auditor` | main repo (read-only at section branch tips); auditor repo (full) | auditor repo only. Cannot push to main repo at all. |
+| `onboarder` | main repo (all paths); brownfield source materials at `/source` (read-only mount, not the main repo) | main repo: `refs/heads/main` only (any path under it, by hook). Policy is single-shot per project: the operator-side entry script enforces this by inspecting `main.git`'s state before any push. No access to the auditor repo. |
 | `human` | everything | everything; merges section branches into `main`. |
 
 Any deployment satisfies the methodology if and only if it enforces this table by mechanism, not by trust. An agent that errs (or is misled by content in its inputs) must be unable to write to a path or repo it has no permission on.
@@ -152,6 +155,8 @@ The auditor repo is the durable source of the audit; the main repo carries the c
 - May write only to `/briefs/**` and root coordination files. Cannot touch source code.
 - Is the only agent the human routinely interacts with.
 
+**The architect is the only role with persistent context across a project.** Planners, coders, and auditors each begin every section (or task, or audit) with a clean context window and only the inputs in their brief — they have no inherited project memory by design. The architect, by contrast, carries `SHARED-STATE.md` and `TOP-LEVEL-PLAN.md` across the whole project and is rehydratable from those two documents if its session is ever lost. This asymmetry is foundational to the methodology's role economy: context lives where coordination needs it; ephemeral roles stay cheap and stateless. It also explains why migration onboarding (see "Onboarder" below) exists at all — to ease the only role onboarding *can* ease.
+
 ### Planner (ephemeral, terminal-based, one per section)
 - Started by the human with a pointer to a brief filepath in the main repo.
 - Reads the section brief, then operates in the main repo on the section branch.
@@ -178,6 +183,17 @@ The auditor repo is the durable source of the audit; the main repo carries the c
 - May write code (test harnesses, stress scripts, probes) in the auditor repo only.
 - Produces the audit report in the auditor repo. May recommend or include suggested patches as diffs in the report — but **cannot mutate the main codebase or commit to the main repo.**
 - Discharges.
+
+### Onboarder (ephemeral, one per project, single-shot, pre-architect)
+- Exists only for brownfield projects being migrated into the methodology. Greenfield projects skip this role entirely; the architect attaches directly to an empty `main` and produces `SHARED-STATE.md` and `TOP-LEVEL-PLAN.md` from scratch with the human.
+- Started by the human via the operator-side onboarding script (the deployment variant supplies its name; for variant A it is `./onboard-project.sh <source-path> [--type 1|2|3|4]`).
+- Receives the brownfield source materials via a read-only mount (not committed yet at the time the onboarder starts; the onboarding script imports them as the first commit on `main` immediately before the onboarder is launched, so the working copy reflects the migrated state from the onboarder's first read).
+- Reads the source materials, builds a synthesis of project identity, scope, stack, and observed methodology state, classifies the project by the four-type taxonomy (1: code only / 2: +human notes / 3: +agent history / 4: +informal methodology), and enters an **interactive elicitation loop with the operator** — questions in batches of two or three at a time, refining the synthesis between rounds, until the unknowns are stable.
+- Produces exactly one artifact: the handover brief at `/briefs/onboarding/handover.md` in the main repo. The brief contains nine sections (project identity; source materials inventory; code structural review; history review; SHARED-STATE.md candidate; TOP-LEVEL-PLAN.md candidate; known unknowns; operator's stated priorities; carry-over hazards) per the canonical template.
+- May commission **sub-agents** — the *code migration agent* (structural code review against the target platform) and the *history migration agent* (reconstruction from preserved transcripts and artifacts, for types 3 and 4). These sub-agents are descriptive-name sub-roles whose scope lives inside the onboarder's run, distinct in name from the profession-name top-level roles. The shell version of the onboarder ships **without** these sub-agents; they are added in follow-on sections of the substrate work. Until then, sections 3 and 4 of the handover brief are filled by the onboarder itself with operator-acknowledged "no automated review run" notes plus pointer-level observations from a single read-through.
+- May write only to `/briefs/onboarding/handover.md` on `main` (plus the upstream source-tree import commit performed by the operator-side entry script under the same identity). Cannot touch source code paths after the import; cannot touch the auditor repo at all.
+- Single-shot per project — there is no re-onboarding pattern. If a project genuinely needs to be re-onboarded, the operator tears the substrate down and creates a new one. This constraint is enforced by the operator-side entry script, which inspects `main.git`'s state before any commit and refuses to run if the project is past the initial empty commit.
+- Discharges. Its container is removed. Its output (the handover brief) is consumed by the architect on first attach; see §8.
 
 ### Human
 - Sets and owns the goals.
@@ -326,6 +342,7 @@ This is the architect's durable working memory. A fresh architect, given only th
 
 ## 8. Lifecycle
 
+0. **(Brownfield projects only) Onboard.** Before the architect attaches for the first time, the human runs the operator-side onboarding script. The onboarder imports the brownfield source tree as the initial commit on `main`, synthesises and elicits with the operator, and produces the handover brief at `/briefs/onboarding/handover.md`. On the architect's first attach, the substrate's architect entrypoint detects the handover (and the absence of `SHARED-STATE.md` — first-attach signal) and seeds the architect's first claude session against it, so step 1 below begins from the synthesis the onboarder produced rather than from a blank slate. Greenfield projects skip step 0 entirely.
 1. **Plan.** Human and architect produce `TOP-LEVEL-PLAN.md` at the main repo root.
 2. **For each section** (default serial; parallel only when the architect declares two sections to be in fully unrelated areas, with the human's agreement):
    1. Architect writes the section brief and commits to `main` at `/briefs/sNNN-slug/section.brief.md`.
