@@ -1,0 +1,6 @@
+click==8.1.7
+# DELIBERATE TYPO: this fixture exists to exercise the code migration
+# agent's HIGH-severity finding for a misspelled dependency. The intended
+# name is probably `requests`; the typo `requestz` does not resolve on
+# PyPI. Do not "fix" this — the smoke depends on it.
+requestz==2.31.0

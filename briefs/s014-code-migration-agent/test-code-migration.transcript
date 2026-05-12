@@ -1,0 +1,66 @@
+----------------------------------------------------------------------
+Phase 0: prereqs
+PASS: all required images present
+PASS: smoke fixture present at /home/jonathan/turtle-core/infra/scripts/tests/fixtures/code-migration-smoke
+----------------------------------------------------------------------
+Phase 1: infer-platforms.sh signal detection
+PASS: infer-platforms.sh detected exactly 'python-extras' from the fixture
+PASS: infer-platforms.sh emits empty for a source with no signal files
+PASS: infer-platforms.sh detects both python-extras and node-extras when both signals present
+----------------------------------------------------------------------
+Phase 2: compose-image.sh code-migration python-extras
+PASS: compose-image.sh produced expected tag namespace (agent-code-migration-platforms:9a58faf62761)
+PASS: compose-image.sh re-emit produced the same tag (cache hit on identical inputs)
+PASS: compose-image.sh empty set produces a distinct tag from python-extras
+PASS: composed image has 'ruff' on PATH (python-extras code-migration role block landed)
+PASS: composed image has 'mypy' on PATH (python-extras code-migration role block landed)
+PASS: composed image has 'pip' on PATH (python-extras code-migration role block landed)
+PASS: composed image has 'python3' on PATH (python-extras code-migration role block landed)
+----------------------------------------------------------------------
+Phase 3: validate-tool-surface.sh against composed code-migration image
+PASS: validate-tool-surface.sh passes for python-extras agent's tool surface
+PASS: validate-tool-surface.sh rejects a tool surface naming a missing binary
+----------------------------------------------------------------------
+Phase 4: scaffold scratch substrate
+PASS: generated scratch ssh keys (human, onboarder, code-migration)
+PASS: created scratch network 'turtle-core-test-s014-6503-net'
+PASS: created scratch volumes (mount-roots normalised; .claude.json seeded)
+PASS: wrote scratch compose file
+----------------------------------------------------------------------
+Phase 5: scratch git-server + bare repos + source import
+ Container turtle-core-test-s014-6503-git-server Creating 
+ Container turtle-core-test-s014-6503-git-server Created 
+ Container turtle-core-test-s014-6503-git-server Starting 
+ Container turtle-core-test-s014-6503-git-server Started 
+PASS: git-server up; main.git + auditor.git initialised
+PASS: git-server entrypoint loaded the code-migration key (s014 B.4)
+PASS: source import push succeeded
+----------------------------------------------------------------------
+Phase 6: migration brief authored and pushed to main
+PASS: wrote scratch migration brief at /tmp/turtle-core-test-s014-6503/code-migration.brief.md
+PASS: migration brief pushed to main
+----------------------------------------------------------------------
+Phase 7: code-migration agent run with stub claude
+PASS: code-migration container ran and exited 0
+PASS: code-migration entrypoint logged 'Bootstrap prompt detected' banner
+PASS: code-migration entrypoint parsed and announced tool surface
+----------------------------------------------------------------------
+Phase 8: verify code-migration.report.md on main
+PASS: code-migration.report.md exists on main and is non-empty
+PASS: report commit subject is 'onboarding: code-migration report'
+PASS: all 6 migration-report headings present (presence check)
+----------------------------------------------------------------------
+Phase 9: hook rejects code-migration pushes outside the report path
+PASS: git-server hook rejected code-migration push to a non-report path (rc=1)
+PASS: hook rejection message names the path-restriction diagnostic
+PASS: git-server hook rejected code-migration push to a non-main ref
+PASS: hook ref-rejection message names the expected diagnostic
+----------------------------------------------------------------------
+Phase 10: dispatch-code-migration.sh argparse + error paths
+PASS: --help prints usage and exits 0
+PASS: unknown flag rejected
+PASS: missing source-path rejected with the expected message
+PASS: non-existent source-path rejected
+----------------------------------------------------------------------
+Results: 37 passed, 0 failed.
+note: tearing down turtle-core-test-s014-6503...

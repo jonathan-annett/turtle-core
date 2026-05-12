@@ -1,0 +1,5 @@
+[project]
+name = "code-migration-smoke"
+version = "0.0.1"
+description = "Synthetic fixture for the code migration agent's plumbing test (s014 B.8)."
+requires-python = ">=3.9"
