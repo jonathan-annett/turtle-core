@@ -1,0 +1,287 @@
+# FINDINGS.md — substrate-iteration findings register
+
+Register of findings raised during substrate-iteration work on
+turtle-core. This is the canonical source for which F-numbers
+are taken and what each one means; check here before assigning a
+new one.
+
+**Next available F-number: F59.**
+
+## How to use this register
+
+- **Adding a finding.** Append the next sequential F-number with
+  title, status, severity, origin, resolution (if any), and a
+  short description. Bump the "Next available F-number" line at
+  the top.
+- **Closing a finding.** Update status from `open` or `deferred`
+  to `fixed` (with the section that resolved it) or `retracted`.
+  Leave the entry in place — history is more useful than a clean
+  slate.
+- **Cross-referencing.** Briefs and section reports can refer to
+  findings by F-number with no further citation; the register is
+  the lookup.
+
+## Status legend
+
+- **open** — recently surfaced, not yet triaged or scheduled.
+- **deferred** — known and acknowledged; no action planned in the
+  current sequence. May be picked up later, eliminated by other
+  work, or remain documented indefinitely.
+- **fixed** — resolved in a specific section. Resolution section
+  noted on the entry.
+- **retracted** — was raised but on investigation turned out not
+  to be a real finding (different cause, false positive, etc.).
+- **informational** — documents a design decision or rationale
+  rather than tracking a bug. Stays referenceable; not actionable.
+
+## Severity
+
+- **HIGH** — blocks or significantly degrades methodology runs.
+- **LOW** — narrow impact, workaround available, or cosmetic.
+- **INFO** — no severity in the bug sense; applies to
+  `informational` entries documenting rationale.
+
+---
+
+## Findings
+
+### F1–F41 — Pre-handover-chain history
+
+Findings raised in earlier substrate-iteration work, predating
+the currently-visible handover chain. Detail lives in older
+handovers (pre-s011). Not backfilled here; reach for the handover
+chain if you need to look up a specific number in this range.
+
+### F42 — verify-runner used login shell, broke venv PATH
+
+**Status:** fixed in s011. **Severity:** LOW. **Origin:** session
+ending in handover-s011-shipped-option-b-flashed.
+
+`setup-common.sh`'s verify-runner invoked commands via `bash -lc`
+(login shell), which re-sourced profile scripts and reset PATH,
+dropping the virtualenv prefix. Fixed by switching to `bash -c`.
+
+### F43 — verify-runner didn't wrap with pipefail
+
+**Status:** fixed in s011. **Severity:** LOW. **Origin:** same
+session as F42.
+
+Pipeline failures silently passed because verify-runner didn't
+set `pipefail`. Fixed: `bash -c "set -o pipefail; ${cmd}"`
+wrapper.
+
+### F44 — platformio verify broke under pipefail
+
+**Status:** fixed in s011. **Severity:** LOW. **Origin:** same
+session.
+
+`platformio-esp32.yaml` verify used `pio platform show espressif32
+| head -1`. Under pipefail, `pio` gets SIGPIPE → BrokenPipeError
+→ fails. Fixed: `>/dev/null` instead of piping to `head -1`.
+
+### F45 — hypothesised Docker bridge / LAN routing broken on Crostini
+
+**Status:** retracted. **Severity:** N/A. **Origin:**
+investigation during smoke debugging.
+
+Initially hypothesised that Docker bridge or LAN routing was
+broken on Crostini. Retracted: the smoke test that suggested
+this was itself a false negative (see F46). Actual reachability
+works (proven via `docker exec agent-architect ssh tdongle-pi
+hostname`).
+
+### F46 — LAN smoke test false negative for coder-daemon
+
+**Status:** deferred (informational). **Severity:** LOW.
+**Origin:** smoke debugging that led to F45's retraction.
+
+The LAN smoke test in `setup-linux.sh` gives a false negative for
+`coder-daemon` → registered remote host. The smoke test runs a
+fresh one-shot coder without proper mounts; reachability actually
+works. Substrate-side bug in the smoke test itself.
+
+### F47 — wrong-clone keys against running substrate's git-server
+
+**Status:** deferred. **Severity:** LOW. **Origin:** s011 session.
+
+`commission-pair.sh` from the wrong clone silently uses that
+clone's role keys, gets permission-denied against the running
+substrate's git-server. Operator-discipline issue rather than a
+substrate bug. **Eliminated by construction by s012
+(resource-name parameterisation)** if/when that section ships —
+wrong-clone keys can't collide across clones with different
+project names.
+
+### F48 — ephemeral creds go stale after architect OAuth refresh
+
+**Status:** deferred. **Severity:** LOW. **Origin:** s011 session.
+
+Ephemeral roles (planner, coder-daemon, auditor) read
+claude-code credentials from a shared volume populated by setup
+from the architect's volume. When the architect's OAuth access
+token rotates (every several hours), the shared volume goes
+stale. Workaround documented: re-run `./verify.sh` (which doubles
+as the refresh helper).
+
+### F49 — s008 bootstrap regressed methodology runs
+
+**Status:** fixed in s011. **Severity:** HIGH (was the headline
+regression). **Origin:** discovered when methodology runs
+requiring autonomous git operations from planner/auditor failed
+under s008's non-interactive bootstrap.
+
+s008 made planner/auditor invocations autonomous via
+`BOOTSTRAP_PROMPT` but never extended s001's `--allowed-tools`
+mechanism to them — every git operation got denied. Fixed in
+s011 by making the architect author a "Required tool surface"
+field in section and audit briefs, with a shared bash parser
+that planner/auditor entrypoints use to set `--allowed-tools` +
+`--permission-mode dontAsk`.
+
+### F50 — platform composition
+
+**Status:** deferred (scheduled). **Severity:** HIGH. **Origin:**
+s011 smoke run (auditor image lacked node/npm).
+**Planned resolution:** dedicated F50 section between A and B
+in the migration-onboarding sequence.
+
+Substrate doesn't auto-couple a section's platform needs to
+agent images. Affects auditor, coder, and the upcoming code
+migration agent (Section B). Architect/spec should declare which
+platforms a section depends on; substrate should auto-ensure
+auditor + coder + code-migration images have those platforms
+composed in. Once platforms are in the image, ecosystem-level
+install (`npm install`, `pip --user`, `go install`) works at
+runtime — the platform layer is deliberately minimal bootstrap.
+
+### F51 — audit-brief tool surface omitted cd / git -C patterns
+
+**Status:** fixed in s012 (A.8 doc-fix ride-along).
+**Severity:** HIGH (manifested in two consecutive real audits
+with two different auditor-invented workarounds before fix).
+**Origin:** s011 smoke run; recurred in hello-turtle s001 audit.
+
+Audit-brief tool surface template, as generated by the architect,
+omitted `cd` and `git -C` patterns. First auditor on
+hello-turtle s001 got stuck on `cd /auditor` and `git -C
+/auditor …` denials; second auditor adapted by working from
+`/work` as starting cwd with absolute paths. Fixed in s012 by
+adding "cd vs git -C: pattern asymmetry across mounts"
+subsection to `methodology/architect-guide.md` (audit-brief
+authoring side) and a symmetric subsection to
+`methodology/auditor-guide.md` (receiving side). Spec untouched
+(the cd/git-C choice is operational, not contract).
+
+### F52 — xxd granted in tool surface but not installed in image
+
+**Status:** deferred. **Severity:** LOW. **Origin:** s011 smoke run.
+
+`xxd` granted in tool surface but not installed in the auditor
+image; no validation between the allowlist and image contents.
+Tooling gap; could be a small validator at setup or commission
+time that checks every binary named in the allowlist is on PATH
+in the target image.
+
+### F53 — smoke runbook placeholder syntax confuses bash
+
+**Status:** deferred. **Severity:** LOW (doc). **Origin:** s011
+session (hit live; restore got tangled, Jonathan started over).
+
+Smoke runbook's restore section uses `<placeholder>` syntax that
+bash interprets as input redirection (`-bash: original-uuid: No
+such file or directory`). Should be `${UUID}` with an explicit
+`UUID=$(cat /path/to/.substrate-id)` instruction above. Doc fix
+only.
+
+### F54 — onboarder import needs explicit chown after cp -a
+
+**Status:** fixed in s012. **Severity:** LOW. **Origin:** s012
+A.7 test development.
+
+`cp -a /source/. .` preserves the host user's UID (typically
+1000) on the copied files. The import temp-clone runs in
+`docker run --rm debian:bookworm-slim` as root by default, so
+the temp dir is root-owned but the copied files are 1000-owned.
+Without a normalising `chown -R root:root .` before `git add`,
+git rejects the working tree with `fatal: detected dubious
+ownership in repository`. Fixed in both `onboard-project.sh` and
+`infra/scripts/tests/test-onboarder-shell.sh`. If a future
+section moves the import step into the onboarder container
+itself (running as the agent user, UID 1000), this concern
+reverses — no chown needed.
+
+### F55 — architect /work staleness on long-running architect
+
+**Status:** fixed in s012. **Severity:** HIGH (would have broken
+the architect attach-with-handover path silently). **Origin:**
+s012 test design.
+
+The architect container is long-lived. Setup brings it up; the
+operator may not attach for hours or days. Meanwhile
+`onboard-project.sh` pushes the handover to main. Without
+intervention, the architect's `/work` clone is stale — the
+entrypoint check for `briefs/onboarding/handover.md` would never
+see the new file. Resolved in s012 by two coordinated changes:
+the architect entrypoint runs `git -C /work pull --ff-only
+--quiet` on every start, and `onboard-project.sh` runs `docker
+restart ${ARCHITECT_CONTAINER}` after the onboarder discharges.
+`--ff-only` is intentional — surfaces real anomalies (architect
+with local-only commits) without silently merging.
+
+### F56 — onboarder bootstrap is interactive, divergent from planner/auditor
+
+**Status:** informational (design decision). **Severity:** INFO.
+**Origin:** s012 implementation.
+
+Planner and auditor entrypoints use `claude -p
+"${BOOTSTRAP_PROMPT}" --permission-mode dontAsk --allowed-tools …`
+(non-interactive, print-mode). The onboarder uses `claude
+"${BOOTSTRAP_PROMPT}" --permission-mode dontAsk --allowed-tools
+…` (no `-p` — interactive, prompt seeds the session). Deliberate:
+the planner/auditor work without a human in the loop, but the
+onboarder's elicitation phase requires the operator to be in the
+conversation. The architect's first-attach bootstrap uses the
+same non-`-p` shape for the same reason. **Implication for
+future test authors:** the stub-claude pattern needs a tiny
+generalisation — accept the prompt as `$1` (when invoked
+non-`-p`) OR as `$2` (when invoked with `-p "<prompt>"`). The
+s007/s008 stubs handled `-p` only; the s012 test handles non-`-p`
+only; a future "test all roles in one harness" would dispatch on
+`$1`.
+
+### F57 — single-shot enforcement is script-level, not hook-level
+
+**Status:** informational (design decision). **Severity:** INFO.
+**Origin:** s012 implementation.
+
+The git-server's `update` hook permits the `onboarder` role to
+push to `refs/heads/main` without path restriction. Single-shot
+enforcement lives in `./onboard-project.sh`, which inspects
+`main.git`'s commit count before any state mutation; the hook is
+a fallback for accidental misuse, not the policy boundary.
+Deliberate: a path-based hook rule cannot distinguish the import
+commit (touches source-tree paths) from the handover commit
+(touches `briefs/onboarding/handover.md`) without coupling the
+hook to onboarding semantics. The hook stays simple; the policy
+lives in one obvious place.
+
+### F58 — onboarder allowed-tools list is embedded, not brief-parsed
+
+**Status:** informational (design decision). **Severity:** INFO.
+**Origin:** s012 implementation.
+
+s011 introduced the "Required tool surface" → `--allowed-tools`
+plumbing for planners and auditors, parsing the surface from the
+section/audit brief at commission time. The onboarder has no
+section brief — it's commissioned by `./onboard-project.sh` and
+is project-scoped, not section-scoped. Its tool-surface needs
+are invariant across project types and runs (read /source +
+/methodology, write /work/briefs/onboarding/, git ops against
+main, lightweight shell inspection), so embedding a curated
+allow-list in the entrypoint is correct. **Future
+configurability path:** if a section wants to make the
+onboarder's tool surface configurable (e.g., to preauthorize an
+LSP probe or a project-specific verifier), the natural shape
+would be a top-level methodology document
+(`methodology/onboarder-tool-surface.md`?) that the entrypoint
+parses via the existing `parse-tool-surface.sh`.

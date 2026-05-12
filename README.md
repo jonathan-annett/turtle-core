@@ -1,4 +1,3 @@
-
 # 🐢 turtle-core
 
 The hierarchical agent orchestration substrate — all the way down.
@@ -9,12 +8,12 @@ Reusable infrastructure for the methodology described in
 [`methodology/agent-orchestration-spec.md`](methodology/agent-orchestration-spec.md)
 (v2.3). Clone this repo, run a single setup script, and you have a working
 substrate: a long-lived **architect** container, a private **git-server**
-hosting two bare repos, and the ability to spin up ephemeral
-**planner+coder-daemon** pairs, **auditors**, and (for brownfield migrations)
-the single-shot **onboarder** on demand.
+hosting two bare repos, the ability to spin up ephemeral
+**planner+coder-daemon** pairs and **auditors** on demand, and an
+**onboarder** for importing existing codebases as new turtle-core projects.
 
 The methodology, role guides, and Docker deployment design are all in the
-[`methodology/`](methodology/) directory — the substrate exists to satisfy
+[`methodology/`](methodology) directory — the substrate exists to satisfy
 those specs. Read [`agent-orchestration-spec.md`](methodology/agent-orchestration-spec.md)
 §3.3 for the per-role access table this substrate enforces.
 
@@ -24,14 +23,14 @@ those specs. Read [`agent-orchestration-spec.md`](methodology/agent-orchestratio
 
 After running setup, you have:
 
-| Container | Lifecycle | What it does |
-|---|---|---|
-| `git-server` | long-lived | Hosts `main.git` and `auditor.git` as bare repos. SSH access keyed per role; an `update` hook enforces the §3.3 access table. |
-| `architect` | long-lived (restartable) | Persistent claude-code session. The human's main interlocutor. Writes briefs and `SHARED-STATE.md`; cannot modify source code. |
-| `planner` | ephemeral, per section | Started by `commission-pair.sh`. Decomposes a section into task briefs, commissions coders. |
-| `coder-daemon` | ephemeral, paired with planner | HTTP service on the agent network. Spawns claude-code subshells (one at a time) on the planner's command. |
-| `auditor` | ephemeral, per audit | Started by `audit.sh`. Read-only on `main`, read+write on `auditor.git`. Adversarial. |
-| `onboarder` | ephemeral, per project (single-shot) | Started by `onboard-project.sh` for **brownfield migrations only**. Reads source materials at `/source` (read-only), elicits operator priorities interactively, produces `briefs/onboarding/handover.md`. Greenfield projects skip it. |
+| Container       | Lifecycle                          | What it does |
+| --------------- | ---------------------------------- | --- |
+| `git-server`    | long-lived                         | Hosts `main.git` and `auditor.git` as bare repos. SSH access keyed per role; an `update` hook enforces the §3.3 access table. |
+| `architect`     | long-lived (restartable)           | Persistent claude-code session. The human's main interlocutor. Writes briefs and `SHARED-STATE.md`; cannot modify source code. |
+| `planner`       | ephemeral, per section             | Started by `commission-pair.sh`. Decomposes a section into task briefs, commissions coders. |
+| `coder-daemon`  | ephemeral, paired with planner     | HTTP service on the agent network. Spawns claude-code subshells (one at a time) on the planner's command. |
+| `auditor`       | ephemeral, per audit               | Started by `audit.sh`. Read-only on `main`, read+write on `auditor.git`. Adversarial. |
+| `onboarder`     | ephemeral, per brownfield project  | Started by `onboard-project.sh`. Ingests an existing codebase, elicits structure with the operator, drafts initial `SHARED-STATE.md` and a handover for the architect, then discharges. Brownfield only — greenfield projects skip this entirely. |
 
 All containers run as the unprivileged `agent` user. Per-role SSH keys are
 generated locally and never committed.
@@ -50,9 +49,9 @@ generated locally and never committed.
 
 - **Docker Desktop** OR **Colima** running with at least 4 CPUs and 8 GB
   RAM allocated to the Docker VM:
-  ```
-  colima start --cpu 4 --memory 8
-  ```
+
+      colima start --cpu 4 --memory 8
+
 - All other prereqs ship with macOS.
 - The substrate uses **named volumes** (not bind mounts) for working
   trees, to avoid the host↔VM I/O slowdown on macOS.
@@ -78,42 +77,6 @@ Not yet directly supported by a dedicated script. Workaround:
 3. Run `./setup-linux.sh` from inside the WSL2 shell.
 
 A native PowerShell entry point may be added later.
-
-### Optional: `--adopt-existing-substrate`
-
-If you ran setup before the substrate-identity mechanism existed (i.e.
-your `claude-state-architect` Docker volume was created without the
-`app.turtle-core.substrate-id` label), the first plain re-run of
-`./setup-linux.sh` or `./setup-mac.sh` will fail loudly: the gate sees
-no `.substrate-id` on disk and a labelless volume in Docker, and it
-cannot tell which substrate the volume belongs to.
-
-Migrate by running:
-
-```bash
-./setup-linux.sh --adopt-existing-substrate      # Linux / Crostini / WSL2
-./setup-mac.sh   --adopt-existing-substrate      # macOS
-```
-
-The flag is a **one-shot migration tool**. It mints a new UUID, writes
-`.substrate-id` at the repo root, and rotates `claude-state-architect`
-through a scratch volume so the new label can be applied (Docker local
-volumes do not allow label updates after creation). The architect
-container is briefly stopped during rotation and restarted as the rest
-of setup runs normally. After the flag completes, every subsequent
-plain `./setup-linux.sh` / `./setup-mac.sh` will see matching state
-and proceed quietly.
-
-The flag refuses to run if `.substrate-id` already exists, if the
-`claude-state-architect` volume is missing, if the volume is already
-labelled, or if `infra/keys/<role>/id_ed25519` is missing for any
-role — the last is brief s004's "sufficient evidence of an existing
-substrate" check.
-
-For a fresh install with no prior substrate state on the host, do
-**not** use this flag — plain `./setup-linux.sh` / `./setup-mac.sh`
-will detect the absent volume, generate a new identity, and label
-the volume at create time.
 
 ### Optional: `--install-docker`
 
@@ -158,89 +121,52 @@ git clone <wherever-this-template-lives> myproject
 cd myproject
 
 # Linux / Crostini:
-./setup-linux.sh                                 # default (no language toolchain)
-./setup-linux.sh --platform=go                   # adds Go to coder-daemon + auditor
-./setup-linux.sh --platform=python-extras,c-cpp  # polyglot
-./setup-linux.sh --platform=platformio-esp32 --device=/dev/ttyUSB0
-                                                 # embedded; pass an ESP32 board through
-./setup-linux.sh --remote-host=tdongle-pi=jon@192.168.16.179
-                                                 # embedded HIL via a remote SSH host (s010)
+./setup-linux.sh
 
 # macOS:
 ./setup-mac.sh
-./setup-mac.sh --platform=rust
 
 # Verify everything came up healthy:
 ./verify.sh
+```
 
-# Attach to the architect:
+From here, two paths depending on whether you're starting fresh or
+importing an existing codebase.
+
+### Greenfield: start a new project from scratch
+
+```bash
 ./attach-architect.sh
 # Inside: `claude` (or `claude --resume` to resume your session).
 ```
 
-The `--platform=<name>` flag selects one or more target platforms (Go,
-Rust, Python tooling, C/C++, Node-extras, PlatformIO/ESP32, or
-`default`). Repeated flags concatenate. Without it, the role images
-ship with no language toolchain and behave as they did before s009.
-Available platforms live under `methodology/platforms/`; the schema
-and the catalog are documented in
-`methodology/platforms/README.md`. For embedded targets that need
-hardware-in-the-loop testing (ESP32 over UART), supply
-`--device=<host-path>` so the device is wired into the role
-containers. See `methodology/deployment-docker.md §10` for the full
-operator workflow including `--add-platform` / `--add-device` on
-running substrates.
+You and the architect produce `TOP-LEVEL-PLAN.md`, draft the first
+section brief, commit it, and exit.
 
-`--remote-host=<name>=<user>@<host>[:<port>]` (s010) registers a
-named remote SSH host that role containers can reach as
-`ssh <name> '<command>'`. Useful for embedded HIL via a Pi or
-Chromebook holding the board, cross-arch builds against an ARM
-machine, GPIO/sensor work, or any "test needs a second box"
-scenario. Prerequisite: passwordless SSH+sudo from your shell to
-`<user>@<host>` before registering. Trust posture: registration
-gives the agent unrestricted SSH access with that user's
-privileges — see `methodology/deployment-docker.md §11` for the
-full model and the `--add-remote-host` runtime-extension pathway.
+### Brownfield: import an existing codebase
 
-### Greenfield path
+```bash
+./onboard-project.sh /path/to/existing/project
+```
 
-From there you and the architect produce `TOP-LEVEL-PLAN.md`, draft the
-first section brief, commit it, and exit. Then:
+The onboarder ingests the source tree (single-shot — fails if `main.git`
+already has commits), elicits project structure with you, drafts the
+initial `SHARED-STATE.md` and a handover at
+`briefs/onboarding/handover.md`, commits to `main`, then discharges. The
+architect container restarts automatically and picks up the handover on
+attach.
+
+```bash
+./attach-architect.sh
+# Inside: the architect sees the handover, drafts the first section brief.
+```
+
+### Either path — section work from then on
 
 ```bash
 ./commission-pair.sh <section-slug>     # planner + coder-daemon
 ./audit.sh           <section-slug>     # auditor for the audit step
 ```
-
-### Brownfield path (migrating an existing project)
-
-If your project already has code (and possibly docs, agent transcripts,
-or an informal methodology in use), run the onboarder once, before the
-first architect attach:
-
-```bash
-./onboard-project.sh <path-to-existing-project> [--type 1|2|3|4] [--intake-file <notes.md>]
-```
-
-The onboarder mounts your source tree at `/source` (read-only), imports
-it as the initial commit on `main`, and starts an interactive claude
-session in which it synthesises project understanding and elicits your
-priorities through a few rounds of targeted questions. When you're
-satisfied with the synthesis, it commits `briefs/onboarding/handover.md`
-and discharges. Single-shot per project — re-running on the same
-substrate is refused. Then:
-
-```bash
-./attach-architect.sh
-```
-
-The architect's entrypoint detects the handover (and the absence of any
-existing `SHARED-STATE.md`) and seeds its first claude session against
-it — you skip the blank-slate phase and start from the onboarder's
-synthesis. From there the lifecycle is identical to the greenfield path.
-
-See `methodology/deployment-docker.md §6.4` and
-`methodology/onboarder-guide.md` for the full onboarding model.
 
 ---
 
@@ -268,23 +194,18 @@ storage, etc.), setup proceeds with the architect un-authed. After setup:
 ```bash
 ./attach-architect.sh
 claude auth login        # interactive OAuth; runs once
-# detach with Ctrl-P Ctrl-Q (or `exit` to stop the container)
-./verify.sh              # propagates credentials into the shared volume
 ```
 
-The architect's credentials persist in the `claude-state-architect`
-volume across container restarts. The `./verify.sh` step is required
-on first login: it copies `.credentials.json` from the architect
-volume into `claude-state-shared` so ephemeral planners, coders, and
-auditors inherit the auth. Skipping it leaves every subsequent
-commission un-authed.
+Your credentials persist in the `claude-state-architect` volume across
+container restarts.
 
 ### Refreshing ephemeral-role credentials
 
-Ephemeral roles (planner, coder-daemon, auditor) read claude-code credentials
-from a *separate* shared volume (`claude-state-shared`) populated by setup
-from the architect's volume. When the architect's OAuth access token
-rotates (every several hours), the shared volume goes stale. To re-sync:
+Ephemeral roles (planner, coder-daemon, auditor, onboarder) read
+claude-code credentials from a *separate* shared volume
+(`claude-state-shared`) populated by setup from the architect's volume.
+When the architect's OAuth access token rotates (every several hours),
+the shared volume goes stale. To re-sync:
 
 ```bash
 ./verify.sh        # also acts as the refresh helper
@@ -304,47 +225,12 @@ the env var when set.
 
 ---
 
-## Substrate identity
-
-A substrate is a coupled pair: a working tree on the host (with per-role
-SSH keys under `infra/keys/`) and a set of Docker volumes (auth state,
-bare repos, working volumes). The pair is meaningful only when both
-sides belong to the same substrate. A host may legitimately host more
-than one tree (e.g. a substrate-development clone alongside a real
-substrate), and Docker state is global per host — running setup against
-the wrong combination of tree and Docker state can silently desync them.
-
-To make the pairing checkable, every substrate carries an explicit
-identity:
-
-- **`.substrate-id`** at the repo root — a single line containing a
-  UUID v4. Generated on first-time setup. Mode 0644. Gitignored
-  (per-clone, never committed).
-- **`app.turtle-core.substrate-id=<uuid>`** as a label on the
-  `claude-state-architect` Docker volume — set at volume creation
-  time. The architect volume is the durable, owned-once carrier.
-
-Setup checks both before any state mutation. Outcomes:
-
-| `.substrate-id` | architect volume | Setup behavior |
-|---|---|---|
-| absent | absent | Fresh install — generate UUID, write sentinel, create labelled volume. |
-| present | present, label matches | Ordinary re-setup — proceed quietly. |
-| absent | present | Fail loudly — tree is naive of running substrate. Use `--adopt-existing-substrate` if intentional, or `docker compose down -v` for a clean slate. |
-| present | absent | Fail loudly — tree describes a substrate with no live Docker state. `rm .substrate-id` for fresh install, or restore from backup. |
-| present | present, label mismatch | Fail loudly — tree and Docker state are from different substrates. |
-
-For the model in full, see
-[`methodology/deployment-docker.md`](methodology/deployment-docker.md) §3.5.
-
-`infra/scripts/generate-keys.sh` is no longer safe to run standalone
-in inconsistent-state cases — it inherits the same gate. Run setup,
-which performs proper diagnosis, instead of calling it directly.
-
----
-
 ## Role lifecycle (one-line summary; full detail in `methodology/`)
 
+0. **(Brownfield only.)** Operator runs `./onboard-project.sh <path>`.
+   Onboarder ingests the existing codebase, elicits structure with the
+   operator, drafts initial `SHARED-STATE.md` and an architect handover,
+   then discharges. Architect restarts and reads the handover.
 1. Architect produces `TOP-LEVEL-PLAN.md` and a section brief, commits to
    `main` at `briefs/sNNN-slug/section.brief.md`.
 2. Human runs `./commission-pair.sh sNNN-slug`. The planner decomposes the
@@ -369,35 +255,21 @@ which performs proper diagnosis, instead of calling it directly.
 
 The script:
 
-1. Verifies the section brief exists at
-   `briefs/s001-hello-timestamps/section.brief.md` on main, by querying
-   the architect's `/work` clone (`docker exec agent-architect test -f`).
-   Fails fast with a recovery hint if missing.
-2. Generates a random TCP port (10000–65535) and a random 43-char bearer
+1. Generates a random TCP port (10000–65535) and a random 43-char bearer
    token (`openssl rand -base64 48 | tr -d '\n=+/' | cut -c1-43`).
-3. Writes `.pairs/.pair-s001-hello-timestamps.env` (mode 0600).
-4. Brings up `coder-daemon` for this section in its own compose project
+2. Writes `.pairs/.pair-s001-hello-timestamps.env` (mode 0600).
+3. Brings up `coder-daemon` for this section in its own compose project
    namespace (so multiple pairs can run in parallel).
-5. Builds a deterministic bootstrap prompt and passes it to the planner
-   container via the `BOOTSTRAP_PROMPT` env var. The planner entrypoint
-   detects this and invokes `claude -p "$BOOTSTRAP_PROMPT"` non-
-   interactively before dropping to a shell — so the planner self-
-   bootstraps from the brief filename without any human paste step.
-6. Runs the planner in the foreground.
+4. Prints a commissioning summary block for you to paste into the planner.
+5. Runs the planner in the foreground.
 
 When the planner exits — discharge or kill — the trap runs `compose down -v`
 to dispose the daemon and the ephemeral env file.
 
-**Manual mode.** Running `./commission-pair.sh` without an argument skips
-the brief check and the bootstrap prompt; the planner drops straight to
-a shell. Useful for inspecting/debugging the container during substrate
-iteration.
-
 The daemon's HTTP API (`POST /commission`, `GET /commission/{id}`,
 `GET /commission/{id}/wait`, `POST /commission/{id}/cancel`,
 `GET /commissions`) is documented in
-[`methodology/deployment-docker.md`](methodology/deployment-docker.md)
-§4.
+[`methodology/deployment-docker.md`](methodology/deployment-docker.md) §4.
 
 ### Auditor (per audit)
 
@@ -406,12 +278,52 @@ The daemon's HTTP API (`POST /commission`, `GET /commission/{id}`,
 ```
 
 The auditor reads `briefs/s001-hello-timestamps/audit.brief.md` and writes
-its report to `auditor.git`. Same dual-mode behaviour as
-`commission-pair.sh`: with a slug, the script verifies the audit brief
-exists and bootstraps the auditor non-interactively via
-`BOOTSTRAP_PROMPT`; without a slug, it drops to a shell. After the
-auditor exits, follow the on-screen prompt to have the architect ferry
-the report into `main`.
+its report to `auditor.git`. After it exits, follow the on-screen prompt
+to have the architect ferry the report into `main`.
+
+### Onboarder (per brownfield project, once)
+
+```bash
+./onboard-project.sh /path/to/existing/project
+```
+
+The script:
+
+1. Checks the substrate is up and that `main.git` has no commits yet
+   (single-shot — onboarding only runs against a fresh substrate).
+2. Generates an onboarder keypair if not already present.
+3. Imports the source tree into a temporary clone of `main.git` via a
+   one-shot helper container, then pushes the initial commit.
+4. Brings up the `onboarder` container with read-only access to the
+   imported source under `/source` and a working clone at `/work`.
+5. Runs the onboarder interactively — elicitation requires the operator
+   in the loop, unlike planner/auditor which run autonomously.
+6. On discharge, restarts the architect container so it picks up
+   `briefs/onboarding/handover.md` on its next start.
+
+See [`methodology/deployment-docker.md`](methodology/deployment-docker.md) §6.4
+for the full onboarding workflow.
+
+---
+
+## Watching agents at work
+
+```bash
+./watch-agent.sh                  # auto-detect (one role container running)
+./watch-agent.sh planner          # name the role: planner | coder-daemon | auditor | architect
+./watch-agent.sh <container-name> # exact container name (no fuzzy match)
+./watch-agent.sh -r               # raw JSONL instead of pretty-printed
+```
+
+Tails the active claude-code session JSONL inside a running role
+container, pretty-printed event-by-event — text turns, tool calls, tool
+results, thinking markers. Auto-follows when a new session appears
+inside the same container, which makes it particularly useful for
+`coder-daemon` (which spawns a fresh sub-session per task) and for any
+chained run where one session ends and another begins.
+
+Requires `jq` inside the container for pretty-printing; falls back to
+raw JSONL if missing. `Ctrl-C` to stop.
 
 ---
 
@@ -421,71 +333,6 @@ the report into `main`.
 
 Install whatever it names. The script does not provision tools; it only
 verifies them.
-
-### Setup says my tree and Docker state are from different substrates
-
-The `.substrate-id` at the repo root and the `app.turtle-core.substrate-id`
-label on the `claude-state-architect` Docker volume disagree. The tree
-and the Docker state belong to different substrates — running setup
-would have desynced one from the other, so it refused.
-
-Diagnose the volume's claimed identity:
-
-```bash
-docker volume inspect claude-state-architect --format '{{json .Labels}}'
-```
-
-Compare to your sentinel:
-
-```bash
-cat .substrate-id
-```
-
-Resolve by ONE of:
-
-- Switch to the tree whose `.substrate-id` matches the volume's label.
-- Tear down the wrong substrate's Docker state and start fresh:
-  `docker compose down -v --remove-orphans`
-- If you are deliberately re-pointing this tree at a different substrate
-  (rare), `rm .substrate-id` and consider whether
-  `--adopt-existing-substrate` fits.
-
-### Setup says I have Docker state for a substrate this tree doesn't know about
-
-The `claude-state-architect` volume exists on this host, but this tree
-has no `.substrate-id`. The tree is naive of the running substrate;
-running setup here would silently regenerate per-role keys and fight
-the running substrate for the same volumes.
-
-Resolve by ONE of:
-
-- `./setup-linux.sh --adopt-existing-substrate` (or `setup-mac.sh`) —
-  IF AND ONLY IF you are sure this tree corresponds to the running
-  Docker substrate. See "Optional: `--adopt-existing-substrate`" in
-  Prerequisites.
-- Tear down the live substrate's Docker state, then re-run setup
-  for a fresh install: `docker compose down -v --remove-orphans`
-- Switch to the correct tree.
-
-Diagnose the live substrate's identity:
-
-```bash
-docker volume inspect claude-state-architect --format '{{json .Labels}}'
-```
-
-### Setup says my tree describes a substrate with no live Docker state
-
-The `.substrate-id` is present but the `claude-state-architect` volume
-does not exist. Either the volume was removed (e.g. `compose down -v`),
-you are setting up on a different host than the original setup, or you
-restored the tree from backup but not the volumes.
-
-Resolve by ONE of:
-
-- Re-attach this tree to a fresh substrate: `rm .substrate-id` and
-  re-run setup. This generates a new substrate identity.
-- Restore the matching architect volume from backup (with its
-  `app.turtle-core.substrate-id` label intact), then re-run setup.
 
 ### `verify.sh` fails after setup
 
@@ -503,6 +350,13 @@ Run `./verify.sh` — it doubles as the refresh helper. Internally it runs
 a one-shot `debian:bookworm-slim` container to copy the architect's
 `.credentials.json` into the shared volume.
 
+### `onboard-project.sh` fails with "main.git already has commits"
+
+Onboarding is single-shot by design — it only runs against a fresh
+substrate. If you've already pushed coordination commits to `main.git`,
+either start over (`docker compose down -v` and re-run setup) or proceed
+greenfield by attaching the architect directly.
+
 ### Nuke and start over
 
 This destroys all substrate state, including any commits to `main.git`,
@@ -511,7 +365,6 @@ This destroys all substrate state, including any commits to `main.git`,
 ```bash
 docker compose down -v --remove-orphans
 docker network rm agent-net 2>/dev/null || true
-rm -f .substrate-id
 # Re-run setup:
 ./setup-linux.sh
 ```
@@ -551,9 +404,8 @@ docker compose -p $(basename "$PWD")-<section> exec coder-daemon \
 
 ## What this template does NOT do
 
-- **Project source code.** Empty by design. The first project will be the
-  proof-of-concept "hello world with timestamps" CLI, drafted via the
-  methodology after the substrate is trusted.
+- **Project source code.** Empty by design for greenfield use. Brownfield
+  use imports an existing tree via the onboarder.
 - **CI / production deployment.** Standard CI on PRs to section branches,
   outside the methodology. The methodology stops at "section merged to
   `main`, audit passed."
@@ -568,41 +420,66 @@ docker compose -p $(basename "$PWD")-<section> exec coder-daemon \
 ```
 project-template/
 ├── README.md                ← this file
+├── CLAUDE.md                ← substrate-internal (see note below)
+├── FINDINGS.md              ← substrate-internal (see note below)
 ├── docker-compose.yml       ← long-lived (git-server, architect) and
 │                              ephemeral-profile (planner, coder-daemon,
-│                              auditor) services
+│                              auditor, onboarder) services
 ├── setup-linux.sh           ← Linux + Crostini entry point
 ├── setup-mac.sh             ← macOS entry point
 ├── setup-common.sh          ← shared setup body
+├── install-docker.sh        ← optional Docker installer (idempotent, OS-detecting)
 ├── verify.sh                ← smoke test + creds-refresh helper
 ├── commission-pair.sh       ← start a planner+coder-daemon for one section
 ├── audit.sh                 ← start an auditor for one section
-├── onboard-project.sh       ← start an onboarder for brownfield migration (single-shot per project)
+├── onboard-project.sh       ← start an onboarder for a brownfield import
 ├── attach-architect.sh      ← convenience wrapper for `docker compose attach`
+├── watch-agent.sh           ← tail the active session JSONL in a role container
 ├── infra/
 │   ├── base/Dockerfile
-│   ├── architect/Dockerfile  + entrypoint.sh
-│   ├── planner/Dockerfile    + entrypoint.sh
+│   ├── architect/Dockerfile + entrypoint.sh
+│   ├── planner/Dockerfile   + entrypoint.sh
 │   ├── coder-daemon/Dockerfile + entrypoint.sh + daemon.js + package.json
-│   ├── auditor/Dockerfile    + entrypoint.sh
-│   ├── onboarder/Dockerfile  + entrypoint.sh
+│   ├── auditor/Dockerfile   + entrypoint.sh
+│   ├── onboarder/Dockerfile + entrypoint.sh
 │   ├── git-server/Dockerfile + entrypoint.sh + init-repos.sh +
 │   │                          git-shell-wrapper + hooks/update
 │   ├── keys/                ← per-role SSH keys (gitignored except .gitkeep)
 │   └── scripts/generate-keys.sh
-├── methodology/             ← spec, role guides (architect, planner, auditor, onboarder), handover template
+├── methodology/             ← spec, architect/planner/auditor/onboarder guides
 ├── briefs/                  ← runtime: section/task briefs and reports
 ├── .pairs/                  ← runtime: per-pair env files (gitignored)
 ├── .gitignore
 └── .env.example
 ```
 
+### Substrate-internal artifacts (`CLAUDE.md`, `FINDINGS.md`)
+
+These two files at the repo root are for chat-Claude sessions and
+implementing agents doing **substrate-iteration** work on turtle-core
+itself — not for operator workflow on your own project.
+
+- `CLAUDE.md` is auto-loaded by Claude Code when you run `claude` from
+  the repo root. It orients an agent to the substrate-iteration work
+  mode and the boundary between `methodology/` (exported to user
+  projects) and substrate-internal artifacts.
+- `FINDINGS.md` is the canonical register of substrate-iteration
+  findings by F-number, with status, severity, origin, and resolution.
+
+Both are safe to ignore if you're using turtle-core for your own
+project. They don't enter any role container's view at runtime.
+
 ---
 
 ## Pointers
 
-- **`methodology/agent-orchestration-spec.md`** — what this substrate
+- **[`methodology/agent-orchestration-spec.md`](methodology/agent-orchestration-spec.md)** — what this substrate
   implements. §3 is the contract.
-- **`methodology/architect-guide.md`** / **`planner-guide.md`** /
-  **`auditor-guide.md`** — what each ephemeral role should do; loaded
-  into their containers read-only at `/methodology`.
+- **[`methodology/architect-guide.md`](methodology/architect-guide.md)** /
+  **[`planner-guide.md`](methodology/planner-guide.md)** /
+  **[`auditor-guide.md`](methodology/auditor-guide.md)** /
+  **[`onboarder-guide.md`](methodology/onboarder-guide.md)** — what each
+  role should do; loaded into their containers read-only at
+  `/methodology`.
+- **[`methodology/deployment-docker.md`](methodology/deployment-docker.md)** — the deployment design that the
+  compose file and entrypoints implement.
