@@ -225,7 +225,12 @@ if ! docker run --rm \
                 echo "[onboard-import] FATAL: source directory at /src is empty." >&2
                 exit 1
             fi
+            # cp -a preserves source ownership (typically UID 1000 from the
+            # host) while the temp clone is owned by root (this container).
+            # Without normalisation, git refuses the working copy as
+            # "dubious ownership". Chown back to root after copy.
             cp -a /src/. .
+            chown -R root:root .
             git -c user.email=onboarder@substrate.local -c user.name=onboarder add -A
             if git -c user.email=onboarder@substrate.local -c user.name=onboarder diff --cached --quiet; then
                 echo "[onboard-import] FATAL: nothing staged after copy — source contains only files git ignores?" >&2

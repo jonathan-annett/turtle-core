@@ -1,0 +1,128 @@
+----------------------------------------------------------------------
+Phase 0: prereqs
+PASS: all required images present
+----------------------------------------------------------------------
+Phase 1: scaffold scratch substrate
+PASS: generated scratch ssh keys (architect, onboarder, human)
+PASS: created scratch network 'turtle-core-test-s012-2853-net'
+PASS: created scratch volumes (mount-roots normalised)
+PASS: wrote scratch compose + env files
+----------------------------------------------------------------------
+Phase 2: scratch git-server + bare repos
+ Container turtle-core-test-s012-2853-git-server Creating 
+ Container turtle-core-test-s012-2853-git-server Created 
+ Container turtle-core-test-s012-2853-git-server Starting 
+ Container turtle-core-test-s012-2853-git-server Started 
+PASS: git-server up; main.git + auditor.git initialised
+PASS: git-server entrypoint loaded the onboarder key (s012 A.4)
+PASS: main.git contains exactly the initial empty commit
+----------------------------------------------------------------------
+Phase 3: scratch architect (bootstrap block dormant — no handover yet)
+ Container turtle-core-test-s012-2853-git-server Running 
+ Container turtle-core-test-s012-2853-architect Creating 
+ Container turtle-core-test-s012-2853-architect Created 
+ Container turtle-core-test-s012-2853-architect Starting 
+ Container turtle-core-test-s012-2853-architect Started 
+PASS: architect: /work/CLAUDE.md symlink in place (entrypoint completed)
+PASS: architect: no handover yet (correct — onboarding has not run)
+PASS: architect: bootstrap block dormant (no 'Onboarding handover detected' in logs)
+----------------------------------------------------------------------
+Phase 4: synthetic type-1 source tree
+PASS: synthetic source tree at /tmp/turtle-core-test-s012-2853/source (README.md + main.py)
+----------------------------------------------------------------------
+Phase 5: source-tree import commit (onboarder identity)
+PASS: source import push succeeded (onboarder credentials accepted by git-server hook)
+PASS: main.git now has 2 commits (initial empty + source import)
+PASS: import commit subject is 'onboarding: import source materials'
+----------------------------------------------------------------------
+Phase 6: onboarder run with stub claude (writes handover, pushes)
+PASS: onboarder container ran and exited 0
+note: onboarder-run.out tail:
+    Working clone of main:    /work
+    Source materials:         /source  (read-only)
+    Methodology docs:         /methodology
+    Operator intake file:     none (operator did not pass --intake-file)
+    Project type hint:        1
+  
+    This container exists to produce one artifact:
+        /work/briefs/onboarding/handover.md
+  
+    Per the methodology spec §3.3, this container can push to refs/heads/main
+    for paths under briefs/onboarding/** only. Other paths and refs are
+    rejected by the git-server's update hook.
+  
+    Run 'claude' (or wait for the bootstrap prompt to drive it for you)
+    and follow /methodology/onboarder-guide.md (symlinked as /work/CLAUDE.md).
+  
+  ================================================================================
+  
+  
+  Bootstrap prompt detected; starting interactive claude session.
+  When claude discharges, you'll be dropped into a shell.
+  
+  
+  Claude discharged. Dropping to interactive shell.
+  
+PASS: onboarder entrypoint logged 'Bootstrap prompt detected' banner
+PASS: onboarder entrypoint logged post-discharge banner (reached bash -l)
+----------------------------------------------------------------------
+Phase 7: verify main.git state after onboarding
+PASS: main.git now has 3 commits (initial + import + handover)
+PASS: handover commit subject is 'onboarding: handover brief'
+PASS: handover commit's parent is the source-import commit
+----------------------------------------------------------------------
+Phase 8: handover file content (9 sections present)
+PASS: handover.md exists in main and is non-empty
+PASS: all 9 handover headings present (presence check, not content quality)
+----------------------------------------------------------------------
+Phase 9: architect first-attach bootstrap detects handover
+PASS: architect entrypoint completed (exit 0) on restart with handover present
+note: architect-restart.out tail:
+    start a new one. Your session state persists across container restarts
+    via the claude-state-architect docker volume.
+  
+    Per the methodology spec §3.3, this container can push only to:
+        briefs/**, SHARED-STATE.md, TOP-LEVEL-PLAN.md, README.md, MIGRATION-*.md
+    on refs/heads/main. Other paths and refs are rejected by the git-server.
+  
+    Detach without stopping:  Ctrl-P then Ctrl-Q  (default docker keys)
+    Stop the container:       'exit' or 'docker compose stop architect'
+  
+  ================================================================================
+  
+  
+  Onboarding handover detected; bootstrapping architect's first session
+  against /work/briefs/onboarding/handover.md.
+  
+  On exit (Ctrl-D or 'exit'), you'll be dropped to a shell. Detach the
+  container without stopping it via Ctrl-P Ctrl-Q to keep the architect
+  running for subsequent ./attach-architect.sh sessions.
+  
+  
+  Architect bootstrap session ended. Dropping to interactive shell.
+  Use 'claude --resume' to resume the session you just had, or
+  'claude' to start a new one.
+  
+PASS: architect entrypoint logged 'Onboarding handover detected' (Option α fired)
+PASS: architect entrypoint logged 'Architect bootstrap session ended' (claude returned, dropped to shell)
+PASS: architect stub claude was invoked by the entrypoint
+PASS: architect stub claude received a bootstrap prompt referencing the handover
+----------------------------------------------------------------------
+Phase 10: ./onboard-project.sh refuses to re-onboard a populated substrate
+ Container turtle-core-test-s012-2853-git-server Running 
+ Container turtle-core-test-s012-2853-architect Creating 
+ Container turtle-core-test-s012-2853-architect Created 
+ Container turtle-core-test-s012-2853-architect Starting 
+ Container turtle-core-test-s012-2853-architect Started 
+PASS: onboard-project.sh exited non-zero (rc=1) on a populated substrate
+PASS: onboard-project.sh error mentions 'refusing to onboard'
+PASS: rejection left main.git at 3 commits (no state leaked)
+----------------------------------------------------------------------
+Phase 11: ./onboard-project.sh argparse error paths
+PASS: no-args invocation: rejects with '<source-path> is required'
+PASS: non-existent source-path: rejects with 'source-path is not a directory'
+PASS: invalid --type: rejects with the expected error
+PASS: --help: prints usage and exits 0
+----------------------------------------------------------------------
+Results: 35 passed, 0 failed.
+note: tearing down turtle-core-test-s012-2853...
