@@ -2,7 +2,7 @@
 
 A lean view for the persistent agent paired with the human. This guide includes only what the architect needs to do its job. The internal mechanics of how planners decompose sections, how coders execute tasks, and how auditors design probes are deliberately omitted — that is noise to the architect's context window.
 
-This guide is a derivative of the canonical methodology spec (v2.2). When the spec changes, regenerate this view from it. Do not hand-edit.
+This guide is a derivative of the canonical methodology spec (v2.3). When the spec changes, regenerate this view from it. Do not hand-edit.
 
 ---
 
@@ -111,6 +111,15 @@ Concrete patterns by section shape:
 - **Section involving remote-host SSH (s010 substrates).** Add `Bash(ssh <remote-name>:*)` for each registered remote host the section touches, and `Bash(scp:*)` if file transfers are part of the work.
 - **HIL section involving device passthrough.** Same as above plus whatever flash/serial tooling the platform plugin exposes (e.g. `Bash(pio test:*)`, `Bash(pio run:*)`).
 - **Audit brief, read-only.** Auditor needs `Read` over the main-repo checkout and methodology, `Edit` and `Write` scoped to the auditor repo for the report and any private tooling, `Bash(git log:*)` and `Bash(git diff:*)` for read-only inspection, plus the audit's verification commands (test runners, static analysers, HIL access). The auditor's main-repo clone is mounted read-only at the volume level, so even a `Bash(git commit:*)` allowance there cannot reach `main` — but keep the audit brief's tool surface tight regardless; it is also a documentation of audit scope.
+
+### `cd` vs `git -C`: pattern asymmetry across mounts
+
+When authoring an audit brief's tool surface, think explicitly about which working directory the auditor's git operations will run from. The auditor has two mounts with different writability, and the choice of pattern follows from that asymmetry:
+
+- **Main-repo clone at `/work` is mounted read-only.** Some claude-code tool surfaces deny `Bash(cd:*)` into mounted read-only roots, and even where `cd` is allowed it is fragile — a subshell exit can drop the auditor back to a writable cwd unexpectedly. **Author the surface so the auditor uses `git -C /work <subcmd>`** with an absolute path rather than `cd /work && git`. Grant `Bash(git -C /work log:*)`, `Bash(git -C /work diff:*)`, etc. explicitly. Example: `Bash(git -C /work log:*)` — not `Bash(git log:*)` plus `Bash(cd /work)`.
+- **Auditor repo at `/auditor` is read-write and is the auditor's natural workspace.** `cd /auditor` followed by plain `git` is fine here because the clone is writable and the auditor is expected to work *in* it (write the report, build tooling). Grant `Bash(cd:*)` and `Bash(git *:*)` patterns scoped naturally; the cwd convention works.
+
+F51 manifested twice in real audits (two different auditor-invented workarounds for the same missing pattern); the doc-fix lives here so the next audit brief you author prompts the right thinking. The substrate's brief parser does not distinguish `Bash(git -C /work …)` from `Bash(cd …)` plus `Bash(git …)`; both are valid surfaces. The discipline is on the architect to pick the one that matches the auditor's mount geometry.
 
 Be **precise**. Daemon-level denial is silent for the recipient — the planner/auditor sees a tool call rejected and may not understand why. Tighter than necessary is recoverable (you re-author the brief with the extra pattern, the human re-commissions); looser than necessary is a quiet security/correctness hazard.
 
