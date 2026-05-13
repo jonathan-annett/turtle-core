@@ -243,7 +243,13 @@ The operator's notes from those runs go in a follow-up document (suggested path:
 
 ## Findings surfaced during section work
 
-**F59** — `depends_on: git-server` short-circuits the external `agent-net` reference. Raised by the post-merge smoke (see amendment below), fixed in the same amendment. Next available F-number is now **F60**.
+Three: all fixed during s014's post-merge stabilisation work (the amendment and the hotfix).
+
+- **F59** — `depends_on: git-server` short-circuits the external `agent-net` reference. Raised by the post-merge smoke; fixed in the amendment (B.11 + B.12). See "Amendment" section below.
+- **F60** — `dispatch-code-migration.sh` repo_root resolution off by one level (B.5 typo: `/..` should be `/../..`). Raised by the post-merge smoke after F59 was patched; fixed in the hotfix.
+- **F61** — architect's /work clone is stale between phase-1 push and phase-2 dispatch. Raised by the post-merge smoke after F60 was patched; fixed in the hotfix (polished from operator's first cut).
+
+Next available F-number is now **F62**.
 
 ---
 
@@ -297,3 +303,46 @@ The broader `container_name:` parameterisation work is real but separate. Out of
 ## Post-amendment smoke
 
 The operator re-runs phase 1 of the smoke runbook (`briefs/s014-code-migration-agent/smoke-runbook.md`) against the same source fixture. Expected outcome: the onboarder no longer collides on `agent-git-server`; the migration brief and draft handover land in the long-lived main.git; phase 2 dispatch succeeds; phase 3 produces the final handover; architect first-attach detection fires. Operator's notes from the actual run go in a follow-up document.
+
+---
+
+# Hotfix — F60 + F61 (dispatch path + architect /work staleness)
+
+The post-amendment smoke surfaced two further bugs in sequence, both exposed only by running `./onboard-project.sh` end-to-end against an actually long-lived substrate. The B.8 hermetic test missed both because it drove the code-migration container directly (`ce run --rm code-migration`) without going through `./onboard-project.sh`'s multi-phase orchestrator — so the orchestrator-side staleness window (F61) and the dispatch helper's behavioural code path (F60) were never exercised.
+
+## F60 — dispatch helper repo_root typo
+
+B.5 shipped `repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"` — one `..` jump instead of two. Since the script lives at `infra/scripts/dispatch-code-migration.sh`, this resolved repo_root to `infra/`, making every subsequent `${repo_root}/infra/...` reference resolve to `infra/infra/...` (nonexistent). The `set -uo pipefail` shape (no `-e`) made the `source <nonexistent>` error non-fatal — the script kept going and failed mysteriously downstream.
+
+Why Phase 10 of the B.8 test didn't catch it: all its assertions exercised arg-parse error paths (`--help`, `--bogus`, missing source-path) that exit BEFORE reaching any `${repo_root}/...` reference. The behavioural dispatch path (which sources `check-brief.sh`, invokes `compose-image.sh`, etc.) wasn't exercised end-to-end.
+
+Fix: change `/..` to `/../..`. Single character per slash; path now resolves correctly.
+
+Lesson for future substrate-iteration sections: scripts under `infra/scripts/` (or deeper) need `/../..` (or deeper) in their `dirname`-relative repo_root computation. Existing scripts in the tree (`compose-image.sh`, `resolve-platforms.sh`, `render-dockerfile.sh`, `validate-tool-surface.sh`) already do this correctly; my B.5 script was the outlier.
+
+## F61 — architect's /work stale between phase 1 push and phase 2 dispatch
+
+After F60 was patched, the next failure: `dispatch-code-migration.sh` couldn't find the migration brief at `/work/briefs/onboarding/code-migration.brief.md` even though phase-1 verification reported it present on origin/main.
+
+The split: phase-1 verification used `git cat-file -e origin/main:<path>` (inspects refs). `dispatch-code-migration.sh`'s `check_brief_exists` uses `docker exec ${arch} test -f /work/<path>` (inspects working tree). The architect's /work is pulled only on architect *restart* (F55, s012), which happens at the END of `./onboard-project.sh`, after phase 3 — there was no pull between phase 1 push and phase 2 dispatch.
+
+Operator's first-cut fix added a `git fetch + git pull` block right before the phase-2 banner. Refined in this hotfix to:
+- Move the pull into the phase-1 verification block (logical home: "verification" should fully sync /work, not just refs).
+- Replace `fetch + cat-file -e` with `pull --ff-only -q` (single command, syncs working tree and refs together).
+- Use `${arch_container}` not the hardcoded `agent-architect` (consistency with rest of script; keeps the s012 test's `ARCHITECT_CONTAINER` env override working).
+- Fail loud if the pull fails (clear error vs. downstream "brief not found").
+- `--ff-only` carries F55's "surfaces real anomalies" safety.
+
+### Override-from-operator-cut
+
+The operator's hotfix worked but had three small issues I refined: hardcoded container name (breaks test-fixture overrides), redundant fetch (phase-1 verification just did one), and silent pull failure (`&&` short-circuits on fetch failure but not on pull failure). Refinement keeps the behaviour identical for the working path; adds clarity on the error path and aligns with the script's variable conventions.
+
+## Test suite
+
+The B.8 plumbing test still passes (42/42); F60 + F61 didn't manifest there because the test bypasses `./onboard-project.sh`. Strengthening the test to exercise the orchestrator end-to-end would have caught both — possible follow-up section, but out of scope here (the operator's smoke is the definitive check, and they re-run it after this commit lands).
+
+## Why these are F-numbers, not bug fixes inside the amendment
+
+F59, F60, and F61 are three distinct mechanisms (depends_on short-circuit; path typo; ref-vs-working-tree split). Conflating them into one finding would lose the lessons. The s013 pattern: each surfaced mechanism gets its own entry.
+
+Hotfix commit: `2bd7652` (operator-authored, F60 fix + first-cut F61). Polish + FINDINGS entries: this commit.

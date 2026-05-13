@@ -5,9 +5,9 @@ turtle-core. This is the canonical source for which F-numbers
 are taken and what each one means; check here before assigning a
 new one.
 
-**Next available F-number: F60.**
+**Next available F-number: F62.**
 
-(F50 and F52 were resolved in s013; F59 was raised and resolved in the s014 amendment. See entries below.)
+(F50 and F52 were resolved in s013. F59 was raised and resolved in the s014 amendment. F60 and F61 were raised and resolved in the s014 hotfix. See entries below.)
 
 ## How to use this register
 
@@ -290,6 +290,112 @@ commit (touches source-tree paths) from the handover commit
 (touches `briefs/onboarding/handover.md`) without coupling the
 hook to onboarding semantics. The hook stays simple; the policy
 lives in one obvious place.
+
+### F61 — architect's /work clone is stale between phase-1 push and phase-2 dispatch
+
+**Status:** fixed in s014 (hotfix, polished). **Severity:** HIGH
+(blocked dispatch in the post-merge smoke). **Origin:** s014
+post-merge methodology-run smoke (phase 1 of
+`briefs/s014-code-migration-agent/smoke-runbook.md`, surfaced after
+F60 was patched).
+
+**Mechanism.** `infra/architect/entrypoint.sh` (s012 / F55) runs
+`git -C /work pull --ff-only --quiet` on every architect-container
+start, keeping /work in sync with origin/main across operator
+sessions. But that mitigation fires on architect *restart*, and
+`./onboard-project.sh` only restarts the architect at the END of
+the three-phase flow (after phase 3 lands the final handover).
+Between phase 1 (onboarder pushes the migration brief) and phase 2
+(host runs `dispatch-code-migration.sh`), the architect's /work is
+whatever it was at the architect's previous startup — typically the
+initial empty commit on a fresh substrate.
+
+`dispatch-code-migration.sh`'s `check_brief_exists` (and its
+subsequent `docker exec ${arch} cat /work/${brief_path}`) inspects
+the architect's **working tree** at `/work/${brief_path}`, not the
+`origin/main` ref. Without an explicit pull between phase 1 and
+phase 2, the working tree never contains the brief the onboarder
+just pushed — dispatch fails with "brief not found at
+briefs/onboarding/code-migration.brief.md" even though the brief is
+present on origin/main.
+
+The phase-1 verification block already ran `git fetch -q origin
+main` (which updates the architect's `origin/main` ref) followed by
+`git cat-file -e origin/main:...` (which inspects refs, not working
+tree). So the verification passed; dispatch failed. The
+ref-vs-working-tree split is what made the bug invisible to the
+existing check.
+
+**Why this wasn't caught earlier.** The s014 plumbing test
+(`test-code-migration.sh`) drives the code-migration container
+directly (`ce run --rm code-migration`) without going through
+`./onboard-project.sh`'s multi-phase orchestrator — so it never
+exercised the stale-/work window the orchestrator opens. The s012
+test exercised `./onboard-project.sh` only for its single-shot
+rejection path (Phase 10), which exits before the architect-/work-
+sync code runs.
+
+**Fix.** Replace the `git fetch -q origin main` in the phase-1
+verification block with `git pull --ff-only -q origin main` —
+fetches AND syncs the working tree in one operation. Fail loud with
+a clear diagnostic if the pull fails (caller can inspect manually
+rather than chasing a downstream "brief not found" error). Uses
+`${arch_container}` not the hardcoded name to keep the s012 test's
+`ARCHITECT_CONTAINER` env override working. The `--ff-only` carries
+F55's "surfaces real anomalies" safety: silently merging a diverged
+/work could mask a real problem.
+
+**Generalisation.** The same /work-staleness window exists between
+any pair of architect-clone-using operations that don't trigger an
+architect restart. `commission-pair.sh` and `audit.sh` don't have
+this exposure today because the architect commits + pushes briefs
+to main directly from inside its own container — there's no
+"someone else pushes, then architect's /work needs to see it" race.
+The onboarder flow is unique in having a non-architect role push to
+main, then expecting the architect's /work to reflect it. Future
+similar flows (e.g. when the history migration agent ships in
+Section C) need to remember to pull before architect-/work-reading
+operations downstream of a non-architect push.
+
+### F60 — `dispatch-code-migration.sh` repo_root resolution off by one level
+
+**Status:** fixed in s014 (hotfix). **Severity:** HIGH (broke the
+dispatch helper end-to-end). **Origin:** s014 post-merge
+methodology-run smoke (first invocation against a real substrate
+exposed the typo; B.8's hermetic test missed it).
+
+**Mechanism.** `infra/scripts/dispatch-code-migration.sh` lives at
+`infra/scripts/` — two levels below the repo root. The repo_root
+resolution in B.5 used `dirname "${BASH_SOURCE[0]}"`/.. — one level
+up, yielding `infra/` instead of the repo root. Every subsequent
+`${repo_root}/infra/...` reference (sourcing
+`infra/scripts/lib/check-brief.sh`, invoking
+`infra/scripts/compose-image.sh`, etc.) resolved to
+`infra/infra/scripts/...` — nonexistent paths.
+
+**Why this wasn't caught earlier.** The script uses
+`set -uo pipefail` (no `-e`), so `source <nonexistent-file>` printed
+an error to stderr but did NOT abort the script. The B.8 plumbing
+test's Phase 10 only exercised arg-parsing error paths (`--help`,
+`--bogus`, missing source-path) — all of which exit BEFORE the
+script reaches any `${repo_root}/...` reference. The script's
+behavioural path (the actual dispatch flow) was never exercised end-
+to-end by the test; the existing tests only verified arg-parse
+diagnostics.
+
+**Fix.** Change `/..` to `/../..` in the repo_root computation. One
+character per slash; the path now resolves to the actual repo root.
+
+**Lesson.** Future scripts under `infra/scripts/` (or deeper) must
+use `/../..` (or deeper) in their `dirname`-relative repo_root
+computation. Similar scripts in the existing tree already do this
+correctly — `compose-image.sh`, `resolve-platforms.sh`,
+`validate-tool-surface.sh`, `render-dockerfile.sh`. B.5's
+`dispatch-code-migration.sh` was the outlier. A defensive
+self-check (e.g. `[ -f "${repo_root}/CLAUDE.md" ] || die`) at the
+top of any such script would have failed loud at first run; not
+adding it everywhere now, but worth considering for any future
+substrate-iteration section.
 
 ### F59 — `depends_on: git-server` short-circuits the external `agent-net` reference
 

@@ -412,9 +412,29 @@ BOOTSTRAP_PROMPT="${bootstrap_prompt_phase_1}" \
 # Verify the migration brief and draft handover landed on main before
 # proceeding to dispatch. The architect's /work clone is the
 # verification surface (mirror check-brief.sh's pattern).
+#
+# s014 hotfix (F61): the existing fetch updates the architect's
+# origin/main ref but leaves /work's checked-out files stale.
+# dispatch-code-migration.sh's check_brief_exists (and its subsequent
+# `docker exec ${arch} cat /work/${brief_path}`) inspects the working
+# tree, not origin/main, so a pull is required here. F55's
+# architect-restart-pulls-/work mitigation only fires at the END of
+# onboard-project.sh, after phase 3 — between phase 1 push and phase 2
+# dispatch, only an explicit pull keeps /work in sync. `--ff-only`
+# carries the F55 safety: surfaces real anomalies rather than silently
+# merging if the architect has local-only commits.
 echo
 echo "[onboard] verifying phase 1 outputs on origin/main..."
-docker exec "${arch_container}" git -C /work fetch -q origin main 2>/dev/null || true
+if ! docker exec "${arch_container}" git -C /work pull --ff-only -q origin main; then
+    cat >&2 <<EOF
+
+onboard-project.sh: FATAL — could not pull origin/main into
+${arch_container}'s /work clone. The phase-1 push may have failed,
+or the architect's /work has diverged. Inspect manually before
+proceeding.
+EOF
+    exit 1
+fi
 for required in "briefs/onboarding/code-migration.brief.md" "briefs/onboarding/handover.draft.md"; do
     if ! docker exec "${arch_container}" git -C /work cat-file -e "origin/main:${required}" 2>/dev/null; then
         cat >&2 <<EOF
@@ -443,9 +463,6 @@ echo "[onboard] phase 1 outputs present: code-migration.brief.md, handover.draft
 echo
 echo "[onboard] PHASE 2: dispatching code migration agent..."
 echo
-
-docker exec agent-architect git -C /work fetch origin main && \
-    docker exec agent-architect git -C /work pull --ff-only
 
 SOURCE_PATH="${source_path_abs}" \
 ARCHITECT_CONTAINER="${arch_container}" \
