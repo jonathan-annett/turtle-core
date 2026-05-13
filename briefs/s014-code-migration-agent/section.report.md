@@ -243,4 +243,57 @@ The operator's notes from those runs go in a follow-up document (suggested path:
 
 ## Findings surfaced during section work
 
-None. No new F-numbers needed. Next available remains **F59**.
+**F59** — `depends_on: git-server` short-circuits the external `agent-net` reference. Raised by the post-merge smoke (see amendment below), fixed in the same amendment. Next available F-number is now **F60**.
+
+---
+
+# Amendment — onboarder orchestration (s014-amendment-onboarder-orchestration.md)
+
+The post-merge phase-1 smoke surfaced F59: the onboarder service's `depends_on: git-server` was forcing compose to instantiate a fresh git-server in the onboarder's compose project namespace, with fresh ephemeral bare-repo volumes — the architect (reading from the long-lived main.git) would never see the onboarder's artifacts. The 37/37 hermetic test passed because everything ran in one compose project; the first operational scenario with a separately-running long-lived substrate is what exposed it.
+
+Amendment tasks B.11 and B.12 close F59. Total commits on the amendment: 3 (B.11, B.12, the F59/section-report update commit).
+
+## B.11 — onboarder compose project shares the long-lived git-server
+
+Single-line fix in `docker-compose.yml`: removed `depends_on: - git-server` from the onboarder service definition. Replaced with a block comment that documents the **mechanism**: `depends_on` here short-circuits the external `agent-net` reference. Compose instantiates the named service locally in the project namespace regardless of whether an external alias exists, taking precedence over the network's DNS resolution. Future edits tempted to add `depends_on: git-server` back "for clarity" will hit the regression-proof in B.12; the comment explains why before they get there.
+
+Other ephemeral roles (planner, coder-daemon, auditor, code-migration) already lacked `depends_on: git-server` and worked correctly cross-project. The onboarder was the outlier inherited from s012, where the test scaffolded everything in one project so the bug never manifested. Operator-side `is_running agent-git-server` enforcement in `./onboard-project.sh` (lines 134-145) keeps the long-lived git-server up before invocation; no new mechanism needed.
+
+Commit: `3ee137f`.
+
+### Override-during-implementation: option (a) over option (b)
+
+The amendment offered two suggested shapes: (a) external network reference, (b) run onboarder in long-lived project namespace with `--profile onboard`. Picked option (a) — which turned out to be a single-line fix once I noticed:
+
+- `agent-net` is **already** declared `external: true` with a fixed name in `docker-compose.yml`. Every ephemeral service joins it. The cross-project DNS plumbing has been in place since s009; the onboarder just had to stop short-circuiting it.
+- Commission-pair.sh / audit.sh / dispatch-code-migration.sh all work cross-project via this exact mechanism. The onboarder's `depends_on` was the anomaly.
+- Option (b) would have required changes to `attach-architect.sh`, the cleanup logic in `onboard-project.sh`, and the compose-project-namespace convention — for no concrete win.
+
+Option (c) would have been a third shape; in practice option (a) reduced to "delete two lines," so there was nothing to invent. Recorded here per the s013 override-during-implementation convention.
+
+## B.12 — test phase 11: cross-project orchestration
+
+Extended `infra/scripts/tests/test-code-migration.sh` with a new Phase 11 (5 assertions, regression-proof for F59):
+
+- **Static contract check.** Awk-parses `docker-compose.yml`, extracts the onboarder service block (terminated at the next dedented service), greps its `depends_on:` list for `- git-server`, fails with a clear diagnostic if found. This is the literal regression-proof — the behavioural checks below cannot detect a re-introduction on their own (the test compose file is generated, necessarily matches the fixed shape).
+- **Behavioural check.** Runs the onboarder service in a separate compose project namespace (`${project}-onboard`) from the scratch substrate. Stub claude writes `briefs/onboarding/orchestration-test-sentinel.md`, commits, pushes. Asserts the sentinel exists on the long-lived bare repo (`${vol_main_bare}`), and that no ephemeral volumes / containers were created in the new namespace.
+
+Verified both directions: 42/42 PASS with B.11 applied; with B.11 reverted, Phase 11 fails at the static contract assertion with the regression diagnostic.
+
+Cleanup extended to handle the new namespace's volumes (defensive: only relevant if F59 regresses, but cheap).
+
+Commit: `9eec21b`.
+
+## Test transcript (post-amendment)
+
+42/42 PASS. Transcript at `briefs/s014-code-migration-agent/test-code-migration.transcript` updated.
+
+## Reading the bug correctly
+
+The amendment doc named a temptation worth recording: reading F59 as a `container_name:` collision would have led to "fix" by parameterising container names — making the failure silent without addressing the cause. The onboarder would still have written to an ephemeral bare repo; the architect still wouldn't have seen the artifacts. The container_name collision was the loud symptom, not the bug. The bug is the depends_on short-circuit; the fix is at that layer.
+
+The broader `container_name:` parameterisation work is real but separate. Out of scope for this amendment; its own future substrate-iteration section if anyone wants to take it on.
+
+## Post-amendment smoke
+
+The operator re-runs phase 1 of the smoke runbook (`briefs/s014-code-migration-agent/smoke-runbook.md`) against the same source fixture. Expected outcome: the onboarder no longer collides on `agent-git-server`; the migration brief and draft handover land in the long-lived main.git; phase 2 dispatch succeeds; phase 3 produces the final handover; architect first-attach detection fires. Operator's notes from the actual run go in a follow-up document.

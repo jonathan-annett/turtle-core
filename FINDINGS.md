@@ -5,9 +5,9 @@ turtle-core. This is the canonical source for which F-numbers
 are taken and what each one means; check here before assigning a
 new one.
 
-**Next available F-number: F59.**
+**Next available F-number: F60.**
 
-(F50 and F52 were resolved in s013 — see entries below. No new findings surfaced during s013's substrate-iteration work.)
+(F50 and F52 were resolved in s013; F59 was raised and resolved in the s014 amendment. See entries below.)
 
 ## How to use this register
 
@@ -290,6 +290,65 @@ commit (touches source-tree paths) from the handover commit
 (touches `briefs/onboarding/handover.md`) without coupling the
 hook to onboarding semantics. The hook stays simple; the policy
 lives in one obvious place.
+
+### F59 — `depends_on: git-server` short-circuits the external `agent-net` reference
+
+**Status:** fixed in s014 (amendment). **Severity:** HIGH (broke
+brownfield onboarding silently against a long-lived substrate).
+**Origin:** s014 post-merge methodology-run smoke (phase 1 of
+`briefs/s014-code-migration-agent/smoke-runbook.md`).
+
+**Mechanism (the bit that matters).** When a docker-compose service
+declares `depends_on: <name>` AND that name is another service in
+the same compose file, compose instantiates `<name>` in the current
+project namespace before the external network's DNS resolution can
+run. The external `agent-net` network reference (declared with
+`external: true, name: agent-net` at the file's bottom and joined by
+every dispatched role) was already wired correctly to bridge the
+ephemeral compose project (e.g. `-p hello-turtle-onboard`) to the
+long-lived substrate's git-server. But `depends_on: git-server` on
+the onboarder service forced compose to spin up a fresh git-server
+in the ephemeral project namespace first, attaching to fresh
+ephemeral `<project>_main-repo-bare` / `<project>_auditor-repo-bare`
+volumes. The `container_name: agent-git-server` on the long-lived
+git-server made this fail loudly with a collision; without
+container_name, the failure would have been silent — onboarder
+artifacts (migration brief, draft handover, code-migration report,
+final handover) would land in the ephemeral bare repo, which gets
+torn down at cleanup, never reaching the architect.
+
+**Why this wasn't caught earlier.** Inherited from s012 where the
+onboarder shell's test (`test-onboarder-shell.sh`) scaffolded
+everything in one compose project — never exercised the cross-
+project scenario. The s014 plumbing test (`test-code-migration.sh`)
+followed the same single-project pattern. The first time anything
+in s014 was exercised alongside a long-lived substrate it was
+supposed to feed into was the post-merge methodology-run smoke.
+
+**Fix.** Removed `depends_on: - git-server` from the onboarder
+service in `docker-compose.yml`. The agent-net external network now
+does the work it was always wired for: the onboarder container joins
+agent-net, resolves `git-server` to the long-lived container via
+DNS, and pushes to the long-lived main.git. Other ephemeral roles
+(planner, coder-daemon, auditor, code-migration) already lack
+`depends_on: git-server` and worked correctly cross-project — the
+onboarder was the outlier. Operator-side `is_running agent-git-server`
+check in `./onboard-project.sh` (lines 134-145) keeps the long-lived
+git-server up before invocation; no new mechanism needed.
+
+**Regression-proof.** `infra/scripts/tests/test-code-migration.sh`
+Phase 11 (added in B.12) statically parses `docker-compose.yml` and
+fails if the onboarder service declares `depends_on: - git-server`.
+A future edit that reintroduces it for "clarity" will fail the test
+suite at this assertion with a diagnostic naming F59 by number.
+
+**The trap to avoid.** Reading the bug as a `container_name:`
+collision and "fixing" it by parameterising `container_name` would
+make the failure silent without addressing the cause — the
+onboarder would still write to an ephemeral bare repo. The
+`container_name:` parameterisation work is real but separate (its
+own substrate-iteration section, not folded in here). F59 is about
+the orchestration short-circuit; that's the contract.
 
 ### F58 — onboarder allowed-tools list is embedded, not brief-parsed
 
