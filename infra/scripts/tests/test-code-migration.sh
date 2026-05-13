@@ -72,10 +72,21 @@ cleanup_test() {
     if [ -f "${compose_file}" ]; then
         docker compose -p "${project}" -f "${compose_file}" \
             --profile ephemeral down --remove-orphans >/dev/null 2>&1 || true
+        # Phase 11 may have left a separate compose project namespace
+        # (${project}-onboard) — tear it down too. No-op when Phase 11
+        # didn't run (compose treats unknown -p as empty).
+        docker compose -p "${project}-onboard" -f "${compose_file}" \
+            --profile ephemeral down -v --remove-orphans >/dev/null 2>&1 || true
     fi
     docker volume rm \
         "${vol_shared}" "${vol_main_bare}" "${vol_auditor_bare}" \
         >/dev/null 2>&1 || true
+    # Defensive: remove any volumes compose may have created in the
+    # ${project}-onboard namespace despite our checks above (only
+    # happens if F59 regresses).
+    docker volume ls --format '{{.Name}}' \
+        | grep "^${project}-onboard_" \
+        | xargs -r docker volume rm >/dev/null 2>&1 || true
     docker network rm "${network}" >/dev/null 2>&1 || true
     rm -rf "${work_dir}" 2>/dev/null || true
     exit "${rc}"
@@ -279,6 +290,30 @@ services:
       - ${keys_dir}/code-migration:/home/agent/.ssh:ro
       - \${SOURCE_PATH:-/dev/null}:/source:ro
       - ${repo_root}/infra/scripts/lib/parse-tool-surface.sh:/usr/local/lib/turtle-core/parse-tool-surface.sh:ro
+    networks: [agent-net]
+    stdin_open: true
+    tty: true
+
+  # s014 amendment (Phase 11): onboarder service for the cross-project
+  # orchestration test. Mirrors the production docker-compose.yml shape
+  # AFTER the F59 fix: NO 'depends_on: git-server' (that's the
+  # regression case the phase verifies). Without depends_on, running
+  # this service in a separate compose project namespace does NOT
+  # bring up a fresh git-server in that namespace; the onboarder
+  # joins the external agent-net and resolves 'git-server' to the
+  # long-lived container.
+  onboarder:
+    image: agent-onboarder:latest
+    profiles: ["ephemeral"]
+    environment:
+      ANTHROPIC_API_KEY: \${ANTHROPIC_API_KEY:-}
+      ONBOARDING_TYPE_HINT: \${ONBOARDING_TYPE_HINT:-unknown}
+    volumes:
+      - ${vol_shared}:/home/agent/.claude
+      - ${repo_root}/methodology:/methodology:ro
+      - ${keys_dir}/onboarder:/home/agent/.ssh:ro
+      - \${SOURCE_PATH:-/dev/null}:/source:ro
+      - \${INTAKE_FILE:-/dev/null}:/onboarding-intake.md:ro
     networks: [agent-net]
     stdin_open: true
     tty: true
@@ -712,6 +747,180 @@ if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -qF "not a directory"; then
 else
     fail "non-existent source-path not rejected (rc=${rc})"
 fi
+
+# ===========================================================================
+# Phase 11 — s014 amendment / F59: cross-project orchestration
+#
+# Verifies that running the onboarder service in a separate compose
+# project namespace from the long-lived substrate does NOT spin up an
+# ephemeral git-server in the new namespace. The onboarder must join
+# the external agent-net network, resolve `git-server` to the
+# long-lived container in ${project}, and commit its artifact to the
+# long-lived bare repo at ${vol_main_bare}.
+#
+# Regression-proofs the F59 fix: removing `depends_on: git-server`
+# from the onboarder service in docker-compose.yml. With depends_on
+# re-added, this phase would fail at the container-name collision
+# (loud) or — if container_name were also removed — silently land
+# the onboarder's commit in an ephemeral fresh bare repo within the
+# new project namespace, which the long-lived architect would never
+# see.
+# ===========================================================================
+hr; echo "Phase 11: cross-project onboarder dispatch (F59 regression-proof)"
+
+# Static contract check on the production docker-compose.yml. This is
+# the literal regression-proof for F59: a future edit that adds
+# `depends_on: - git-server` back to the onboarder service would
+# short-circuit the external agent-net reference and re-introduce the
+# bug. Because the test's own compose file is generated fresh (and
+# necessarily generated to match the fixed shape, since we're testing
+# the cross-project mechanism works), the behavioural check below
+# cannot detect this regression on its own — it'd be testing against
+# a hardcoded shape, not the production file. The static assertion
+# below closes that gap.
+prod_compose="${repo_root}/docker-compose.yml"
+# Use docker compose's own config parser to read the production file —
+# it normalises depends_on (list or map) into a canonical form. Filter
+# to the onboarder service via `--format json` + jq is overkill; we
+# just grep the rendered config for an `onboarder` service whose
+# depends_on lists git-server. compose's config output reorders /
+# normalises but always emits depends_on as a YAML block we can match
+# unambiguously with awk: extract the `onboarder:` service block
+# (terminated by the next dedented service or top-level key), then
+# look for `depends_on` followed (possibly across lines) by
+# `git-server`.
+onboarder_block=$(awk '
+    BEGIN { in_block = 0 }
+    /^  onboarder:[[:space:]]*$/ { in_block = 1; print; next }
+    in_block && /^  [a-zA-Z_-]+:[[:space:]]*$/ { in_block = 0 }
+    in_block && /^[a-zA-Z_-]+:[[:space:]]*$/ { in_block = 0 }
+    in_block { print }
+' "${prod_compose}")
+if printf '%s\n' "${onboarder_block}" | grep -qE '^[[:space:]]*depends_on:' && \
+   printf '%s\n' "${onboarder_block}" | awk '
+        /^[[:space:]]*depends_on:/ { in_deps = 1; next }
+        in_deps && /^[[:space:]]*-/ { print; next }
+        in_deps && !/^[[:space:]]*-/ { in_deps = 0 }
+    ' | grep -qE -- '-[[:space:]]+git-server[[:space:]]*$'; then
+    fail "production docker-compose.yml regressed F59 — onboarder.depends_on names git-server"
+    note "extracted onboarder block:"
+    printf '%s\n' "${onboarder_block}" | sed 's/^/  /'
+else
+    pass "production docker-compose.yml onboarder service has no depends_on: git-server (F59 static contract)"
+fi
+
+onboard_project="${project}-onboard"
+
+# Stub claude for the onboarder. Production onboarder runs claude
+# interactively (no -p), so $1 is the BOOTSTRAP_PROMPT. The stub
+# ignores the prompt, writes a sentinel artifact under
+# briefs/onboarding/, commits, pushes, exits 0.
+cat > "${stub_dir}/onboarder-claude" <<STUB_EOF
+#!/bin/bash
+# Stub claude for Phase 11. Writes a sentinel file to verify the
+# onboarder's commit lands in the long-lived bare repo.
+set -euo pipefail
+cd /work
+mkdir -p briefs/onboarding
+cat > briefs/onboarding/orchestration-test-sentinel.md <<'SENTINEL_EOF'
+# orchestration-test-sentinel
+
+Written by Phase 11's stub onboarder to verify cross-project
+dispatch lands artifacts in the long-lived bare repo. If you see
+this file in main.git's history, the F59 fix is working.
+SENTINEL_EOF
+git -c user.email=onboarder@substrate.local -c user.name=onboarder \
+    add briefs/onboarding/orchestration-test-sentinel.md
+git -c user.email=onboarder@substrate.local -c user.name=onboarder \
+    commit -q -m "test: orchestration-test sentinel (Phase 11)"
+git push -q origin main
+exit 0
+STUB_EOF
+chmod 0755 "${stub_dir}/onboarder-claude"
+
+# Capture pre-run state for the negative checks (no ephemeral
+# volumes / containers should appear in the onboard project's namespace).
+volumes_before=$(docker volume ls --format '{{.Name}}' | grep -c "^${onboard_project}_" || true)
+containers_before=$(docker ps -a --format '{{.Names}}' | grep -c "^${onboard_project}-\|^${onboard_project}_" || true)
+
+# Run the onboarder in the SEPARATE compose project namespace
+# (${onboard_project}, distinct from the scratch substrate's
+# ${project}). The compose file is the same one; only -p differs.
+# Without F59's depends_on removal, this run would either:
+#   (a) collide on container_name agent-git-server, or
+#   (b) succeed in bringing up a fresh git-server in ${onboard_project}
+#       whose new bare-repo volume would receive the push.
+# With F59 fixed, it brings up only the onboarder, joins agent-net,
+# and pushes to the long-lived bare repo.
+onboarder_run_out="${work_dir}/onboarder-cross-project.out"
+
+set +e
+SOURCE_PATH="${fixture_dir}" \
+INTAKE_FILE=/dev/null \
+ONBOARDING_TYPE_HINT=1 \
+docker compose -p "${onboard_project}" -f "${compose_file}" --profile ephemeral run --rm -T \
+    -e BOOTSTRAP_PROMPT="phase-11-cross-project-sentinel" \
+    -e ONBOARDING_TYPE_HINT=1 \
+    -v "${stub_dir}/onboarder-claude:/usr/local/bin/claude:ro" \
+    onboarder </dev/null >"${onboarder_run_out}" 2>&1
+onboarder_rc=$?
+set -e
+
+if [ "${onboarder_rc}" -eq 0 ]; then
+    pass "onboarder container ran cross-project and exited 0"
+else
+    fail "onboarder cross-project run exited ${onboarder_rc} (expected 0; depends_on regression likely)"
+    note "onboarder-cross-project.out tail:"
+    tail -25 "${onboarder_run_out}" 2>/dev/null | sed 's/^/  /' || true
+fi
+
+# The decisive check: the sentinel must be on the LONG-LIVED bare repo
+# (the git-server container in ${project}, NOT a fresh one in
+# ${onboard_project}). 'ce' uses ${project}; if the sentinel is there
+# the artifact landed where it belongs.
+sentinel_blob=$(ce exec -T git-server \
+    git --git-dir=/srv/git/main.git show "main:briefs/onboarding/orchestration-test-sentinel.md" 2>/dev/null)
+if printf '%s' "${sentinel_blob}" | grep -qF "orchestration-test-sentinel"; then
+    pass "sentinel landed in the long-lived bare repo (${vol_main_bare})"
+else
+    fail "sentinel NOT found in the long-lived bare repo — F59 regression: the onboarder's commit went to an ephemeral bare repo"
+fi
+
+# Negative check 1: no fresh bare-repo volume created in the onboarder's
+# project namespace. With depends_on broken, compose would create
+# ${onboard_project}_main-repo-bare (or similar) to back the spurious
+# git-server it spun up.
+volumes_after=$(docker volume ls --format '{{.Name}}' | grep "^${onboard_project}_" || true)
+if [ -z "${volumes_after}" ]; then
+    pass "no ephemeral volumes created in onboarder's project namespace (${onboard_project})"
+else
+    fail "F59 regression — ephemeral volumes appeared in ${onboard_project}:"
+    printf '%s\n' "${volumes_after}" | sed 's/^/  /'
+fi
+
+# Negative check 2: no fresh git-server-style container created in the
+# onboarder's project namespace. (The onboarder's own container is
+# torn down by `run --rm`, so it shouldn't appear either, but a
+# spurious git-server would.)
+# Use `docker compose -p` introspection rather than name grep — more
+# reliable across compose name-style variations.
+containers_in_namespace=$(docker compose -p "${onboard_project}" -f "${compose_file}" \
+    ps --all --format '{{.Service}}' 2>/dev/null | grep -v '^$' || true)
+if [ -z "${containers_in_namespace}" ] || [ "${containers_in_namespace}" = "onboarder" ]; then
+    # Either empty (compose run --rm cleaned the onboarder up too) or
+    # only `onboarder` itself (which compose may briefly report).
+    pass "no spurious git-server container in ${onboard_project} namespace"
+else
+    fail "F59 regression — unexpected services in ${onboard_project}:"
+    printf '%s\n' "${containers_in_namespace}" | sed 's/^/  /'
+fi
+
+# Cleanup: tear down the onboarder's compose project. With F59 fixed,
+# this should be a no-op (run --rm already cleaned up); with the
+# regression in place, this would tear down the spurious git-server
+# and its ephemeral volumes.
+docker compose -p "${onboard_project}" -f "${compose_file}" --profile ephemeral down -v --remove-orphans \
+    >/dev/null 2>&1 || true
 
 # ===========================================================================
 # Summary

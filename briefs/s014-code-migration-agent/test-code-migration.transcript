@@ -23,21 +23,21 @@ PASS: validate-tool-surface.sh rejects a tool surface naming a missing binary
 ----------------------------------------------------------------------
 Phase 4: scaffold scratch substrate
 PASS: generated scratch ssh keys (human, onboarder, code-migration)
-PASS: created scratch network 'turtle-core-test-s014-6503-net'
+PASS: created scratch network 'turtle-core-test-s014-3919-net'
 PASS: created scratch volumes (mount-roots normalised; .claude.json seeded)
 PASS: wrote scratch compose file
 ----------------------------------------------------------------------
 Phase 5: scratch git-server + bare repos + source import
- Container turtle-core-test-s014-6503-git-server Creating 
- Container turtle-core-test-s014-6503-git-server Created 
- Container turtle-core-test-s014-6503-git-server Starting 
- Container turtle-core-test-s014-6503-git-server Started 
+ Container turtle-core-test-s014-3919-git-server Creating 
+ Container turtle-core-test-s014-3919-git-server Created 
+ Container turtle-core-test-s014-3919-git-server Starting 
+ Container turtle-core-test-s014-3919-git-server Started 
 PASS: git-server up; main.git + auditor.git initialised
 PASS: git-server entrypoint loaded the code-migration key (s014 B.4)
 PASS: source import push succeeded
 ----------------------------------------------------------------------
 Phase 6: migration brief authored and pushed to main
-PASS: wrote scratch migration brief at /tmp/turtle-core-test-s014-6503/code-migration.brief.md
+PASS: wrote scratch migration brief at /tmp/turtle-core-test-s014-3919/code-migration.brief.md
 PASS: migration brief pushed to main
 ----------------------------------------------------------------------
 Phase 7: code-migration agent run with stub claude
@@ -62,5 +62,12 @@ PASS: unknown flag rejected
 PASS: missing source-path rejected with the expected message
 PASS: non-existent source-path rejected
 ----------------------------------------------------------------------
-Results: 37 passed, 0 failed.
-note: tearing down turtle-core-test-s014-6503...
+Phase 11: cross-project onboarder dispatch (F59 regression-proof)
+PASS: production docker-compose.yml onboarder service has no depends_on: git-server (F59 static contract)
+PASS: onboarder container ran cross-project and exited 0
+PASS: sentinel landed in the long-lived bare repo (turtle-core-test-s014-3919-main-bare)
+PASS: no ephemeral volumes created in onboarder's project namespace (turtle-core-test-s014-3919-onboard)
+PASS: no spurious git-server container in turtle-core-test-s014-3919-onboard namespace
+----------------------------------------------------------------------
+Results: 42 passed, 0 failed.
+note: tearing down turtle-core-test-s014-3919...
