@@ -169,8 +169,23 @@ services:
     # ephemeral roles.
     image: ${ONBOARDER_IMAGE:-agent-onboarder:latest}
     profiles: ["ephemeral"]
-    depends_on:
-      - git-server
+    # s014 amendment (F59): NO `depends_on: git-server`. The onboarder
+    # is invoked from ./onboard-project.sh in its own compose project
+    # namespace (e.g. -p hello-turtle-onboard) while git-server lives
+    # in the long-lived substrate's namespace. A `depends_on: git-server`
+    # here would short-circuit the external `agent-net` reference below
+    # — compose would instantiate a fresh, ephemeral git-server in the
+    # onboard project namespace BEFORE the external network's DNS
+    # could resolve `git-server` to the long-lived container. The
+    # resulting collision (with container_name: agent-git-server) is
+    # the loudest symptom; the deeper problem is that the onboarder's
+    # commits would land in an ephemeral bare repo that gets torn down
+    # at cleanup, never reaching the architect. The same constraint
+    # applies to every ephemeral role (planner, coder-daemon, auditor,
+    # code-migration) — none declare `depends_on: git-server`. Operator
+    # discipline (the is_running check in ./onboard-project.sh) keeps
+    # the long-lived git-server up before invocation; the external
+    # agent-net network does the DNS resolution.
     environment:
       ANTHROPIC_API_KEY:     ${ANTHROPIC_API_KEY:-}
       ONBOARDING_TYPE_HINT:  ${ONBOARDING_TYPE_HINT:-unknown}
