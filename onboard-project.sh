@@ -444,6 +444,9 @@ echo
 echo "[onboard] PHASE 2: dispatching code migration agent..."
 echo
 
+docker exec agent-architect git -C /work fetch origin main && \
+    docker exec agent-architect git -C /work pull --ff-only
+
 SOURCE_PATH="${source_path_abs}" \
 ARCHITECT_CONTAINER="${arch_container}" \
 GIT_SERVER_CONTAINER="${git_container}" \
