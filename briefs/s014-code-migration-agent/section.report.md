@@ -243,13 +243,23 @@ The operator's notes from those runs go in a follow-up document (suggested path:
 
 ## Findings surfaced during section work
 
-Three: all fixed during s014's post-merge stabilisation work (the amendment and the hotfix).
+Eight in total: three fixed during s014's post-merge stabilisation work, five recorded as deferred / informational pointers for future work.
+
+**Fixed in s014 (amendment + hotfix):**
 
 - **F59** — `depends_on: git-server` short-circuits the external `agent-net` reference. Raised by the post-merge smoke; fixed in the amendment (B.11 + B.12). See "Amendment" section below.
 - **F60** — `dispatch-code-migration.sh` repo_root resolution off by one level (B.5 typo: `/..` should be `/../..`). Raised by the post-merge smoke after F59 was patched; fixed in the hotfix.
 - **F61** — architect's /work clone is stale between phase-1 push and phase-2 dispatch. Raised by the post-merge smoke after F60 was patched; fixed in the hotfix (polished from operator's first cut).
 
-Next available F-number is now **F62**.
+**Deferred / informational (no s014 fix; documented for future implementers):**
+
+- **F62** — B.8 plumbing test bypasses `./onboard-project.sh`'s multi-phase orchestrator. Test coverage gap; explains why F59/F60/F61 all surfaced in the post-merge smoke. Fix shape: extend `test-code-migration.sh` or add a separate `test-onboard-project.sh`. Consider scoping before Section C lands so its orchestrator changes don't inherit the same gap.
+- **F63** — code migration agent dispatched host-side, not from inside the onboarder container (B.6 design call). Informational; documents the privilege-elevation rationale so Section C inherits the same pattern without re-litigation.
+- **F64** — `git -C /work …` patterns absent from onboarder / code-migration tool surfaces and role guides. Both roles tripped on this in the smoke; fix shape is doc updates in onboarder-guide + code-migration-agent-guide (plain `git` is canonical for in-/work roles, parallel to F51's `git -C` guidance for read-only-mount roles).
+- **F65** — heading numbering inconsistent between `code-migration-brief-template.md` (unnumbered) and `code-migration-report-template.md` (numbered). Flagged by the code migration agent in its own report's operational notes. Trivial alignment edit.
+- **F66** — operator-side documentation gap. Smoke runbook has no framing-guidance for elicitation; no `methodology/operator-guide.md` exists at all. Wrong framing fails silently (mechanical success, nonsensical handover). Fix shape: per-section operator-notes for the immediate term + future operator-guide once patterns accumulate.
+
+Next available F-number is now **F67**.
 
 ---
 

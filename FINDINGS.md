@@ -5,9 +5,9 @@ turtle-core. This is the canonical source for which F-numbers
 are taken and what each one means; check here before assigning a
 new one.
 
-**Next available F-number: F62.**
+**Next available F-number: F67.**
 
-(F50 and F52 were resolved in s013. F59 was raised and resolved in the s014 amendment. F60 and F61 were raised and resolved in the s014 hotfix. See entries below.)
+(F50 and F52 were resolved in s013. F59 was raised and resolved in the s014 amendment. F60 and F61 were raised and resolved in the s014 hotfix. F62–F66 were raised during the s014 post-merge smoke; all deferred or informational. See entries below.)
 
 ## How to use this register
 
@@ -290,6 +290,259 @@ commit (touches source-tree paths) from the handover commit
 (touches `briefs/onboarding/handover.md`) without coupling the
 hook to onboarding semantics. The hook stays simple; the policy
 lives in one obvious place.
+
+### F66 — operator-side documentation gap (smoke framing + broader operator-guide absence)
+
+**Status:** deferred. **Severity:** LOW (doc / design class).
+**Origin:** s014 post-merge smoke.
+
+**Mechanism (the bit that matters).** The smoke runbook
+(`briefs/s014-code-migration-agent/smoke-runbook.md`) tells the
+operator which command to run and what banners to expect, but offers
+no **framing-guidance** for what the operator should say during
+the onboarder's elicitation pass. LLM variability rules out
+pre-scripting specific Q&A — but framing (the fixture's purpose,
+goals the operator should articulate, hard constraints, tone) is
+both stable and decisive. Without it the operator either knows the
+fixture's purpose from its README or improvises. **Wrong framing
+fails silently:** the smoke mechanically completes (commits land,
+exit codes are 0, "Onboarding complete" banner prints), but the
+resulting handover is nonsense for any downstream consumer. The
+absence of a mechanical-failure signal is what makes this class of
+gap insidious.
+
+**Broader gap.** No operator-side methodology guide exists anywhere
+in the substrate. The role guides
+(`methodology/{architect,planner,coder,auditor,onboarder,code-migration-agent}-guide.md`)
+document the agents' boundaries and behaviour. Nothing documents
+the operator's side — how to commission, what to say during
+elicitation, when to interrupt, what good framing looks like across
+project types and section kinds. Operators rebuild this knowledge
+each session from the README quickstart + ad-hoc reading of the
+role guides + experience.
+
+**Why this wasn't caught earlier.** The hermetic
+`test-code-migration.sh` uses a stub claude that ignores
+operator input entirely — there's no elicitation to frame
+correctly, and the smoke "passes" mechanically regardless of what
+the operator would have said. The post-merge smoke is the first
+time operator-input-quality matters; that's where the gap surfaced.
+
+**Fix shape.** Two tiers:
+
+- *Short term, per-section operator-notes.* For section-specific
+  smokes (s014, future C, etc.), pair the smoke runbook with an
+  "operator framing notes" sibling document — the fixture's
+  purpose, what answers the operator should give during
+  elicitation, what good framing produces vs. wrong framing.
+  Lightweight and tractable per section.
+- *Longer term, `methodology/operator-guide.md`.* Once enough
+  onboardings (and other operator-facing commissions) have
+  accumulated patterns, write a proper operator-side guide. Likely
+  scope: commissioning mechanics, elicitation framing, what to do
+  when an agent loops or thrashes, the role-guide reading order for
+  operators new to the methodology. Premature to write now —
+  patterns aren't stable yet.
+
+**Forward-pointer.** Section C's first smoke run will hit the same
+gap unless someone authors operator framing notes for it. The
+gap's class is not section-specific; only the framing content is.
+
+### F65 — heading numbering inconsistent between code-migration brief and report templates
+
+**Status:** deferred. **Severity:** LOW (doc).
+**Origin:** s014 post-merge smoke — the code migration agent
+flagged the inconsistency in its §5 operational notes when authoring
+its own report.
+
+**Mechanism.** The two templates shipped with B.2 use different
+heading-numbering styles:
+
+- `methodology/code-migration-brief-template.md` uses **unnumbered**
+  `## ` headings (`## Objective`, `## Available context`, ...).
+- `methodology/code-migration-report-template.md` uses **numbered**
+  `## ` headings (`## 1. Brief echo`, `## 2. Per-component intent`,
+  ...).
+
+The agent followed the report template's numbered style faithfully,
+but the inconsistency between commissioning artifact and product
+artifact is jarring for any reader who consumes both. The agent
+itself noticed it during the survey — a useful signal that the
+inconsistency is detectable, not just cosmetic.
+
+**Fix shape.** Trivial alignment edit — pick one style and apply
+consistently across both templates. Recommend numbered (matches the
+onboarder-handover-template, which uses `## 1. Project identity`
+through `## 9. Carry-over hazards`, established the substrate's
+convention for "must contain" templates). The brief template's
+section-headings reference in §B.7 of the spec would need a small
+sync; trivial.
+
+**Why this wasn't caught earlier.** The B.2 templates were authored
+back-to-back without a final cross-read for consistency. The
+hermetic test doesn't render either template; it asserts only on
+the headings the agent's stub-report writes (which mirrored the
+report template). The post-merge smoke with real claude is the
+first time anyone reads both templates side by side.
+
+### F64 — `git -C /work …` patterns absent from onboarder / code-migration tool surfaces and role guides
+
+**Status:** deferred. **Severity:** LOW (operational; recoverable
+in-session by re-issuing as plain `git`).
+**Origin:** s014 post-merge smoke — both onboarder (phases 1 + 3)
+and code-migration agent tripped on `git -C /work …` patterns being
+denied by their respective `--allowed-tools` lists.
+
+**Mechanism.** F51's resolution (cd vs git -C, fixed in s012 A.8)
+added the canonical guidance to `architect-guide.md` (authoring side)
+and `auditor-guide.md` (receiving side). Both architect and auditor
+operate against `/work` as a checkout they do not own as their
+primary cwd — they use `git -C /work …` patterns to inspect
+without `cd`-ing. The newer roles (onboarder, code-migration) work
+**in** `/work` as their primary working directory: the entrypoint
+does `cd /work`, all subsequent operations are naturally rooted
+there, and plain `git add` / `git commit` / `git push` work without
+the `-C` prefix.
+
+The asymmetry is real and the convention is correct — but the
+**per-role guides for the in-/work roles don't document it**.
+Likewise, the tool-surface examples in the migration brief
+template (and elsewhere) don't anchor a preferred form. When the
+agent reaches for `git -C /work log …` (a habit from auditor /
+architect guide reading, or from the spec's §3.3 access table
+descriptions), the pattern is denied because plain `Bash(git
+log:*)` is what's on the allow-list.
+
+**Why this wasn't caught earlier.** Per-role tool-surface
+examples in B.2's migration brief template name `Bash(git add:*)`,
+`Bash(git commit:*)`, `Bash(git push:*)` — the in-/work form. No
+agent in s014's hermetic test exercised a `git -C …` pattern, so
+the missing-pattern path never surfaced. Real claude defaulted to
+`git -C /work …` based on its broader methodology-doc context.
+
+**Fix shape.** Doc updates, two-or-three places:
+
+- `methodology/onboarder-guide.md` — add a short subsection
+  (parallel in shape to the cd-vs-git-C subsection in the
+  auditor-guide) naming **plain `git` in `/work`** as the canonical
+  form for the in-/work roles. The architect-guide and auditor-guide
+  subsections document the asymmetric mount case; the in-/work case
+  is the simpler other side of the same pattern and deserves the
+  symmetric write-up.
+- `methodology/code-migration-agent-guide.md` — same subsection,
+  same content.
+- `methodology/planner-guide.md` — check whether it's also silent
+  on this (planner also works in /work directly); if so, add the
+  same subsection.
+
+**Optional belt-and-braces.** Extend the migration brief template's
+tool-surface example to include both `Bash(git ...:*)` (in-/work
+form) AND `Bash(git -C /work ...:*)` for the patterns most likely
+to be reached for habitually. Trade-off: a slightly looser default
+surface in exchange for a less brittle agent run. Default-permissive
+isn't generally the substrate's stance, so document the choice if
+taken.
+
+**Forward-pointer.** Section C's history migration agent will face
+the same question — it's another in-/work sub-agent. Documenting
+the convention in onboarder-guide + code-migration-agent-guide now
+gives Section C a template to follow.
+
+### F63 — code migration agent dispatched host-side, not from inside the onboarder container
+
+**Status:** informational (design decision). **Severity:** INFO.
+**Origin:** s014 B.6 implementation.
+
+**Mechanism / context.** B.6's brief said "the dispatch call" would
+sit inside the onboarder's entrypoint — implying the onboarder
+container would shell out to `infra/scripts/dispatch-code-migration.sh`
+on the host. The implementation chose the alternative: host-side
+dispatch via `./onboard-project.sh`'s multi-phase orchestrator,
+between phase-1 (onboarder writes migration brief + draft handover,
+discharges) and phase-3 (fresh onboarder reads migration report,
+writes final handover).
+
+**Why host-side wins.** The in-container dispatch path would
+require mounting `/var/run/docker.sock` into the onboarder
+container — a real privilege elevation that turns the onboarder
+into an effective root on the host. Host-orchestrated dispatch
+matches the existing pattern (`commission-pair.sh`, `audit.sh` are
+both host-side); cross-project compose namespaces handle isolation
+cleanly via the external `agent-net` (F59 resolution). The cost is
+splitting the onboarder's interactive work across two containers
+(phase 1 and phase 3); state carries via committed artifacts in
+`/work` (the draft handover at `briefs/onboarding/handover.draft.md`
+is the carrier).
+
+**Forward-pointer.** Section C's history migration agent should
+follow the same host-side dispatch pattern unless a compelling
+reason emerges to elevate the onboarder. The same trade-off
+applies: socket-mounting buys easier in-container orchestration at
+the cost of privilege elevation; the onboarder's interactive UX
+absorbs the split-across-containers cost via committed state.
+Parallel in shape to F56 / F57 / F58 — design decisions documented
+at F-number granularity so future implementers don't re-litigate
+them.
+
+### F62 — B.8 plumbing test bypasses `./onboard-project.sh`'s multi-phase orchestrator
+
+**Status:** deferred (test coverage gap).
+**Severity:** LOW (no current bug; observation).
+**Origin:** s014 post-merge smoke — F59, F60, and F61 all
+surfaced because of this single gap.
+
+**Mechanism.** `infra/scripts/tests/test-code-migration.sh` exercises:
+
+- The code-migration container directly via `ce run --rm
+  code-migration` (Phase 7 of the test).
+- The dispatch helper's arg-parse paths via `bash
+  dispatch-code-migration.sh --help / --bogus / missing source-path`
+  (Phase 10).
+- The cross-project orchestration mechanism via a synthetic
+  onboarder run (Phase 11, added in the amendment for F59).
+
+What the test never drives: `./onboard-project.sh` itself, the
+operator-facing entry point. The multi-phase orchestrator's
+behavioural code paths — phase 1 → verification → dispatch → phase 3
+→ architect restart — have no automated coverage. Three findings
+in one section (F59 `depends_on` short-circuit, F60 `dispatch-code-
+migration.sh` repo_root typo, F61 architect /work staleness) all
+surfaced in the post-merge smoke for this reason. The hermetic test
+passing 42/42 was no signal about the orchestrator's correctness.
+
+**Why the gap exists.** B.8 was scoped against the brief as a
+plumbing test ("verifying the plumbing, not the claude-side survey
+quality"). The orchestrator was implicitly out of scope —
+`./onboard-project.sh` carried both the s012 single-shot enforcement
+and the new s014 multi-phase flow, and B.8's focus was the new code-
+migration container + dispatch helper + git-server clause. The
+amendment's Phase 11 narrowed the gap (cross-project orchestration
+now covered) but the full orchestrator end-to-end is still untested.
+
+**Fix shape.** Two options, both substantial enough that scoping
+into the next substrate-iteration section is reasonable rather than
+folding into s014:
+
+- *Extend `test-code-migration.sh`* with new phases that drive
+  `./onboard-project.sh` end-to-end (stub claudes for both onboarder
+  phases, stub claude for code-migration, scratch substrate, assert
+  all four artifacts land + architect restart sees the handover).
+  Roughly doubles the test's surface; structurally similar to s012's
+  `test-onboarder-shell.sh` Phase 6+9 but in a longer composition.
+- *Add a separate `test-onboard-project.sh`* dedicated to the
+  orchestrator. Cleaner separation: B.8's plumbing test stays
+  focused, the orchestrator gets its own dedicated harness.
+  Probably the right shape given test-onboarder-shell.sh already
+  exists for the s012 shell — pairing them by orchestrator-scope is
+  natural.
+
+**Forward-pointer.** Section C's history migration agent will
+extend `./onboard-project.sh` further (phase 2.5 or a fourth
+phase). Closing the orchestrator coverage gap before Section C
+lands avoids inheriting the same "first real smoke surfaces three
+bugs" pattern. Worth a brief design-call decision early in Section
+C's design chat: extend the test first, or accept the smoke as the
+catch-net for orchestrator changes.
 
 ### F61 — architect's /work clone is stale between phase-1 push and phase-2 dispatch
 
